@@ -49,6 +49,7 @@
       <button id="tab-calendar" class="active">Календарь</button>
       <button id="tab-upcoming">Ближайшие</button>
       <button id="tab-all">Все заказы</button>
+      <button id="tab-finance">Финансы</button>
     </div>
 
     <main>
@@ -68,6 +69,9 @@
 
       <!-- Вид: все заказы -->
       <div id="view-all" style="display:none;"></div>
+
+      <!-- Вид: финансы -->
+      <div id="view-finance" style="display:none;"></div>
     </main>
   </div>
 
@@ -180,13 +184,64 @@
         </div>
       </div>
 
+      <div class="section-title">Расходы по туру</div>
+      <div class="grid2">
+        <div>
+          <label>Транспорт/топливо</label>
+          <input type="number" id="f-cost-transport" step="0.01" placeholder="0" />
+        </div>
+        <div>
+          <label>Оплата гида/водителя</label>
+          <input type="number" id="f-cost-guide" step="0.01" placeholder="0" />
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Входные билеты/экскурсии</label>
+          <input type="number" id="f-cost-tickets" step="0.01" placeholder="0" />
+        </div>
+        <div>
+          <label>Проживание</label>
+          <input type="number" id="f-cost-accommodation" step="0.01" placeholder="0" />
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Прочее</label>
+          <input type="number" id="f-cost-other" step="0.01" placeholder="0" />
+        </div>
+        <div>
+          <label>Прибыль по туру (авто)</label>
+          <input type="text" id="f-profit-display" disabled />
+        </div>
+      </div>
+
       <div class="section-title">Заметки</div>
       <textarea id="f-notes" rows="2" placeholder="Особые пожелания, аллергии, детали..."></textarea>
 
       <div class="section-title">Чек-лист (что нужно сделать)</div>
       <div class="checklist" id="f-checklist"></div>
       <div class="checklist-add">
-        <input type="text" id="f-checklist-new" placeholder="напр. Забронировать минивэн" />
+        <select id="f-checklist-select">
+          <option value="">— выбрать пункт —</option>
+          <option value="Забронировать транспорт (минивэн/авто)">Забронировать транспорт (минивэн/авто)</option>
+          <option value="Подтвердить водителя/гида">Подтвердить водителя/гида</option>
+          <option value="Забронировать доп. билеты (круиз/поезд/входные билеты)">Забронировать доп. билеты (круиз/поезд/входные билеты)</option>
+          <option value="Забронировать отель/ночлег">Забронировать отель/ночлег</option>
+          <option value="Уточнить особые пожелания и аллергии">Уточнить особые пожелания и аллергии</option>
+          <option value="Отправить клиенту детали тура">Отправить клиенту детали тура</option>
+          <option value="Проверить прогноз погоды">Проверить прогноз погоды</option>
+          <option value="Получить аванс">Получить аванс</option>
+          <option value="Получить полную оплату">Получить полную оплату</option>
+          <option value="Выставить счёт/чек">Выставить счёт/чек</option>
+          <option value="Проверить транспорт (техника, топливо)">Проверить транспорт (техника, топливо)</option>
+          <option value="Подготовить путевые документы/ваучеры">Подготовить путевые документы/ваучеры</option>
+          <option value="Связаться с клиентом накануне">Связаться с клиентом накануне</option>
+          <option value="Запросить отзыв">Запросить отзыв</option>
+          <option value="Закрыть заказ">Закрыть заказ</option>
+          <option value="__custom__">Свой вариант…</option>
+        </select>
+        <input type="text" id="f-checklist-new" placeholder="Введите свой пункт" style="display:none;" />
         <button class="secondary" id="f-checklist-add-btn">+</button>
       </div>
 
@@ -197,6 +252,44 @@
         <div class="right">
           <button class="secondary" id="f-cancel">Отмена</button>
           <button id="f-save">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Модалка общебизнес расхода ============ -->
+  <div id="expense-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2>Расход</h2>
+      <div class="grid2">
+        <div>
+          <label>Дата</label>
+          <input type="date" id="fe-date" />
+        </div>
+        <div>
+          <label>Категория</label>
+          <select id="fe-category">
+            <option value="Страховка транспорта">Страховка транспорта</option>
+            <option value="ТО/обслуживание транспорта">ТО/обслуживание транспорта</option>
+            <option value="Регистрация/техосмотр (WOF/rego)">Регистрация/техосмотр (WOF/rego)</option>
+            <option value="Хостинг/сайт">Хостинг/сайт</option>
+            <option value="Реклама/продвижение">Реклама/продвижение</option>
+            <option value="Связь/интернет">Связь/интернет</option>
+            <option value="Прочее">Прочее</option>
+          </select>
+        </div>
+      </div>
+      <label>Сумма (NZD)</label>
+      <input type="number" id="fe-amount" step="0.01" />
+      <label>Заметка</label>
+      <input type="text" id="fe-note" placeholder="необязательно" />
+      <div class="modal-footer">
+        <div>
+          <button class="danger" id="fe-delete" style="display:none;">Удалить</button>
+        </div>
+        <div class="right">
+          <button class="secondary" id="fe-cancel">Отмена</button>
+          <button id="fe-save">Сохранить</button>
         </div>
       </div>
     </div>

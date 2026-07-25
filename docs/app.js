@@ -63,11 +63,43 @@ function tourChipClass(o) {
 
 let orders = [];          // все заказы, загруженные с сервера
 let checklistByOrder = {}; // order_id -> [items]
+let businessExpenses = []; // общебизнес расходы (не привязаны к туру)
 let currentMonth = new Date(); currentMonth.setDate(1);
+let financeMonth = new Date(); financeMonth.setDate(1);
 let selectedDate = todayStr();
 let activeView = 'calendar';
 let editingOrderId = null;
 let editingChecklist = []; // рабочая копия чек-листа в открытой модалке
+let editingExpenseId = null;
+
+// Статьи расходов, которые реально ведёт команда (используется в модалке расхода)
+const BUSINESS_EXPENSE_CATEGORIES = [
+  'Страховка транспорта',
+  'ТО/обслуживание транспорта',
+  'Регистрация/техосмотр (WOF/rego)',
+  'Хостинг/сайт',
+  'Реклама/продвижение',
+  'Связь/интернет',
+  'Прочее'
+];
+
+// Сумма всех расходов по конкретному туру (для расчёта маржи)
+function orderCostTotal(o) {
+  return (Number(o.cost_transport) || 0) + (Number(o.cost_guide) || 0) + (Number(o.cost_tickets) || 0) +
+    (Number(o.cost_accommodation) || 0) + (Number(o.cost_other) || 0);
+}
+
+function monthRange(d) {
+  const y = d.getFullYear(), m = d.getMonth();
+  const start = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const lastDay = new Date(y, m + 1, 0).getDate();
+  const end = `${y}-${String(m + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+}
+
+function fmtMoney(n) {
+  return (Math.round((n || 0) * 100) / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function todayStr() {
   const d = new Date();
@@ -158,6 +190,10 @@ async function loadAll() {
   (items || []).forEach(it => {
     (checklistByOrder[it.order_id] ||= []).push(it);
   });
+
+  const { data: expenses, error: e3 } = await sb.from('business_expenses').select('*').order('expense_date', { ascending: false });
+  if (e3) { console.error(e3); return; } // таблица могла быть ещё не создана — тогда просто не показываем расходы
+  businessExpenses = expenses || [];
 }
 
 function subscribeRealtime() {
@@ -171,13 +207,18 @@ function subscribeRealtime() {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
+  sb.channel('public:business_expenses')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'business_expenses' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
 }
 
 // ------------------------------------------------------------
 // Переключение вкладок-видов
 // ------------------------------------------------------------
-const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all') };
-const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all') };
+const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance') };
+const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance') };
 Object.keys(viewTabs).forEach(key => {
   viewTabs[key].onclick = () => {
     activeView = key;
@@ -190,7 +231,8 @@ Object.keys(viewTabs).forEach(key => {
 function renderCurrentView() {
   if (activeView === 'calendar') renderCalendar();
   else if (activeView === 'upcoming') renderUpcoming();
-  else renderAllOrders();
+  else if (activeView === 'all') renderAllOrders();
+  else renderFinance();
 }
 
 // ------------------------------------------------------------
@@ -296,6 +338,221 @@ function renderAllOrders() {
 }
 
 // ------------------------------------------------------------
+// Финансы
+// ------------------------------------------------------------
+function renderFinance() {
+  const box = document.getElementById('view-finance');
+  const { start, end } = monthRange(financeMonth);
+  const monthOrders = orders.filter(o => o.tour_date >= start && o.tour_date <= end && o.status !== 'cancelled');
+  const monthExpenses = businessExpenses.filter(e => e.expense_date >= start && e.expense_date <= end);
+
+  const revenue = monthOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
+  const tourCosts = monthOrders.reduce((s, o) => s + orderCostTotal(o), 0);
+  const bizCosts = monthExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const profit = revenue - tourCosts - bizCosts;
+  const avgCheck = monthOrders.length ? revenue / monthOrders.length : 0;
+
+  // прибыльность по маршрутам
+  const byType = {};
+  monthOrders.forEach(o => {
+    const key = o.tour_type || 'custom';
+    if (!byType[key]) byType[key] = { count: 0, revenue: 0, cost: 0 };
+    byType[key].count++;
+    byType[key].revenue += Number(o.total_price) || 0;
+    byType[key].cost += orderCostTotal(o);
+  });
+  const byTypeRows = Object.entries(byType)
+    .map(([type, v]) => ({
+      type, ...v,
+      profit: v.revenue - v.cost,
+      margin: v.revenue ? Math.round((v.revenue - v.cost) / v.revenue * 100) : 0
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  // просроченные авансы — всегда "на сейчас", независимо от выбранного месяца
+  const today = todayStr();
+  const overdue = orders.filter(o =>
+    o.status !== 'cancelled' && o.status !== 'completed' &&
+    o.deposit_amount && !o.deposit_paid && o.deposit_due_date && o.deposit_due_date <= today
+  );
+
+  box.innerHTML = `
+    <div class="cal-nav">
+      <button class="ghost" id="fin-prev">←</button>
+      <h2>${financeMonth.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}</h2>
+      <button class="ghost" id="fin-next">→</button>
+    </div>
+
+    <div class="fin-cards">
+      <div class="fin-card"><div class="label">Выручка</div><div class="value">${fmtMoney(revenue)} NZD</div></div>
+      <div class="fin-card cost"><div class="label">Расходы по турам</div><div class="value">${fmtMoney(tourCosts)} NZD</div></div>
+      <div class="fin-card cost"><div class="label">Общебизнес расходы</div><div class="value">${fmtMoney(bizCosts)} NZD</div></div>
+      <div class="fin-card profit"><div class="label">Чистая прибыль</div><div class="value">${fmtMoney(profit)} NZD</div></div>
+    </div>
+    <div class="fin-cards fin-cards-2">
+      <div class="fin-card"><div class="label">Туров за месяц</div><div class="value">${monthOrders.length}</div></div>
+      <div class="fin-card"><div class="label">Средний чек</div><div class="value">${fmtMoney(avgCheck)} NZD</div></div>
+    </div>
+
+    <div class="section-title">Прибыльность по маршрутам</div>
+    ${byTypeRows.length ? `
+    <table class="fin-table">
+      <thead><tr><th>Маршрут</th><th class="num">Туров</th><th class="num">Выручка</th><th class="num">Расходы</th><th class="num">Прибыль</th><th class="num">Маржа</th></tr></thead>
+      <tbody>
+        ${byTypeRows.map(r => `
+          <tr>
+            <td>${escapeHtml(TOUR_LABELS[r.type] || r.type)}</td>
+            <td class="num">${r.count}</td>
+            <td class="num">${fmtMoney(r.revenue)}</td>
+            <td class="num">${fmtMoney(r.cost)}</td>
+            <td class="num">${fmtMoney(r.profit)}</td>
+            <td class="num ${r.margin >= 60 ? 'margin-good' : 'margin-mid'}">${r.margin}%</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>` : `<div class="empty-hint">Нет заказов за этот месяц</div>`}
+
+    <div class="section-title">Непогашенные авансы</div>
+    ${overdue.length ? overdue.map(o => `
+      <div class="overdue-row">
+        <div class="who">${escapeHtml(o.customer_name || '(без имени)')} — ${escapeHtml(TOUR_SHORT[o.tour_type] || o.tour_type)}, ${fmtDate(o.tour_date)}</div>
+        <div class="amt">Ждём ${fmtMoney(o.deposit_amount)} ${o.currency || 'NZD'} (срок был ${fmtDate(o.deposit_due_date)})</div>
+      </div>
+    `).join('') : `<div class="empty-hint">Просроченных авансов нет</div>`}
+
+    <div class="expenses-toolbar">
+      <div class="section-title">Общебизнес расходы</div>
+      <button class="secondary" id="fin-add-expense">+ Добавить расход</button>
+    </div>
+    ${monthExpenses.length ? `
+    <table class="fin-table">
+      <thead><tr><th>Дата</th><th>Категория</th><th>Заметка</th><th class="num">Сумма</th></tr></thead>
+      <tbody>
+        ${monthExpenses.map(e => `
+          <tr class="fin-expense-row" data-id="${e.id}">
+            <td>${fmtDate(e.expense_date)}</td>
+            <td>${escapeHtml(e.category)}</td>
+            <td>${escapeHtml(e.note || '—')}</td>
+            <td class="num">${fmtMoney(e.amount)} ${e.currency || 'NZD'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>` : `<div class="empty-hint">Расходов за этот месяц нет</div>`}
+
+    <div class="footer-actions">
+      <button class="secondary" id="fin-export-csv">⬇ Экспорт в CSV за этот месяц</button>
+    </div>
+  `;
+
+  document.getElementById('fin-prev').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() - 1); renderFinance(); };
+  document.getElementById('fin-next').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() + 1); renderFinance(); };
+  document.getElementById('fin-add-expense').onclick = () => openExpenseModal(null);
+  document.getElementById('fin-export-csv').onclick = () => exportFinanceCsv(monthOrders, monthExpenses, financeMonth);
+  box.querySelectorAll('.fin-expense-row').forEach(row => {
+    row.onclick = () => openExpenseModal(row.dataset.id);
+  });
+}
+
+// ------------------------------------------------------------
+// Модалка общебизнес расхода
+// ------------------------------------------------------------
+const expenseModal = document.getElementById('expense-modal');
+
+function openExpenseModal(expenseId) {
+  editingExpenseId = expenseId;
+  const e = expenseId ? businessExpenses.find(x => x.id === expenseId) : null;
+  document.getElementById('fe-date').value = e?.expense_date || todayStr();
+  document.getElementById('fe-category').value = e?.category || BUSINESS_EXPENSE_CATEGORIES[0];
+  document.getElementById('fe-amount').value = e?.amount ?? '';
+  document.getElementById('fe-note').value = e?.note || '';
+  document.getElementById('fe-delete').style.display = e ? 'inline-block' : 'none';
+  expenseModal.style.display = 'flex';
+}
+
+function closeExpenseModal() {
+  expenseModal.style.display = 'none';
+  editingExpenseId = null;
+}
+
+document.getElementById('fe-cancel').onclick = () => closeExpenseModal();
+
+document.getElementById('fe-save').onclick = async () => {
+  const payload = {
+    expense_date: document.getElementById('fe-date').value,
+    category: document.getElementById('fe-category').value,
+    amount: parseFloat(document.getElementById('fe-amount').value) || 0,
+    note: document.getElementById('fe-note').value || null
+  };
+  if (!payload.expense_date) { alert('Укажите дату'); return; }
+
+  if (editingExpenseId) {
+    const { error } = await sb.from('business_expenses').update(payload).eq('id', editingExpenseId);
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  } else {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('business_expenses').insert({ ...payload, created_by: user?.id });
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  }
+
+  await loadAll();
+  renderCurrentView();
+  closeExpenseModal();
+};
+
+document.getElementById('fe-delete').onclick = async () => {
+  if (!editingExpenseId) return;
+  if (!confirm('Удалить этот расход? Действие необратимо.')) return;
+  await sb.from('business_expenses').delete().eq('id', editingExpenseId);
+  await loadAll();
+  renderCurrentView();
+  closeExpenseModal();
+};
+
+// ------------------------------------------------------------
+// Экспорт финансового отчёта в CSV
+// ------------------------------------------------------------
+function csvEscape(v) {
+  const s = String(v ?? '');
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function exportFinanceCsv(monthOrders, monthExpenses, monthDate) {
+  const monthLabel = monthDate.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  const rows = [];
+  rows.push([`Funtrail — финансовый отчёт за ${monthLabel}`]);
+  rows.push([]);
+  rows.push(['ЗАКАЗЫ']);
+  rows.push(['Дата тура', 'Клиент', 'Маршрут', 'Статус', 'Стоимость', 'Валюта', 'Аванс', 'Транспорт', 'Гид', 'Билеты', 'Проживание', 'Прочее', 'Расходы итого', 'Прибыль']);
+  monthOrders.forEach(o => {
+    const cost = orderCostTotal(o);
+    rows.push([
+      o.tour_date, o.customer_name || '', TOUR_LABELS[o.tour_type] || o.tour_type, STATUS_LABELS[o.status] || o.status,
+      o.total_price ?? '', o.currency || 'NZD', o.deposit_amount ?? '',
+      o.cost_transport ?? '', o.cost_guide ?? '', o.cost_tickets ?? '', o.cost_accommodation ?? '', o.cost_other ?? '',
+      cost, (Number(o.total_price) || 0) - cost
+    ]);
+  });
+  rows.push([]);
+  rows.push(['ОБЩЕБИЗНЕС РАСХОДЫ']);
+  rows.push(['Дата', 'Категория', 'Заметка', 'Сумма', 'Валюта']);
+  monthExpenses.forEach(e => {
+    rows.push([e.expense_date, e.category, e.note || '', e.amount, e.currency || 'NZD']);
+  });
+
+  const csv = rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM — чтобы Excel правильно показал кириллицу
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `funtrail-finance-${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ------------------------------------------------------------
 // Карточка заказа
 // ------------------------------------------------------------
 function orderCard(o, showDate) {
@@ -368,13 +625,35 @@ function openOrderModal(orderId) {
   document.getElementById('f-deposit-amount').value = o?.deposit_amount ?? '';
   document.getElementById('f-deposit-due').value = o?.deposit_due_date || '';
   document.getElementById('f-deposit-paid').checked = !!o?.deposit_paid;
+  document.getElementById('f-cost-transport').value = o?.cost_transport ?? '';
+  document.getElementById('f-cost-guide').value = o?.cost_guide ?? '';
+  document.getElementById('f-cost-tickets').value = o?.cost_tickets ?? '';
+  document.getElementById('f-cost-accommodation').value = o?.cost_accommodation ?? '';
+  document.getElementById('f-cost-other').value = o?.cost_other ?? '';
   document.getElementById('f-notes').value = o?.notes || '';
+  updateProfitDisplay();
 
   editingChecklist = o ? (checklistByOrder[o.id] || []).map(x => ({ ...x })) : [];
   renderChecklistEditor();
+  document.getElementById('f-checklist-select').value = '';
+  document.getElementById('f-checklist-new').value = '';
+  document.getElementById('f-checklist-new').style.display = 'none';
 
   modal.style.display = 'flex';
 }
+
+// Прибыль по туру считается вживую, пока вводите стоимость/расходы —
+// сама нигде не сохраняется, это просто подсказка
+function updateProfitDisplay() {
+  const total = parseFloat(document.getElementById('f-total-price').value) || 0;
+  const costIds = ['f-cost-transport', 'f-cost-guide', 'f-cost-tickets', 'f-cost-accommodation', 'f-cost-other'];
+  const cost = costIds.reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  const profit = total - cost;
+  document.getElementById('f-profit-display').value = fmtMoney(profit) + ' ' + (document.getElementById('f-currency').value || 'NZD');
+}
+['f-total-price', 'f-cost-transport', 'f-cost-guide', 'f-cost-tickets', 'f-cost-accommodation', 'f-cost-other', 'f-currency'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateProfitDisplay);
+});
 
 function renderChecklistEditor() {
   const box = document.getElementById('f-checklist');
@@ -399,12 +678,27 @@ function renderChecklistEditor() {
   });
 }
 
+const checklistSelect = document.getElementById('f-checklist-select');
+const checklistCustomInput = document.getElementById('f-checklist-new');
+
+checklistSelect.onchange = () => {
+  const isCustom = checklistSelect.value === '__custom__';
+  checklistCustomInput.style.display = isCustom ? '' : 'none';
+  if (isCustom) checklistCustomInput.focus();
+};
+
 document.getElementById('f-checklist-add-btn').onclick = () => {
-  const input = document.getElementById('f-checklist-new');
-  const title = input.value.trim();
+  let title;
+  if (checklistSelect.value === '__custom__') {
+    title = checklistCustomInput.value.trim();
+  } else {
+    title = checklistSelect.value;
+  }
   if (!title) return;
   editingChecklist.push({ title, done: false, _new: true });
-  input.value = '';
+  checklistCustomInput.value = '';
+  checklistSelect.value = '';
+  checklistCustomInput.style.display = 'none';
   renderChecklistEditor();
 };
 
@@ -425,6 +719,11 @@ document.getElementById('f-save').onclick = async () => {
     deposit_amount: document.getElementById('f-deposit-amount').value || null,
     deposit_due_date: document.getElementById('f-deposit-due').value || null,
     deposit_paid: document.getElementById('f-deposit-paid').checked,
+    cost_transport: document.getElementById('f-cost-transport').value ? parseFloat(document.getElementById('f-cost-transport').value) : null,
+    cost_guide: document.getElementById('f-cost-guide').value ? parseFloat(document.getElementById('f-cost-guide').value) : null,
+    cost_tickets: document.getElementById('f-cost-tickets').value ? parseFloat(document.getElementById('f-cost-tickets').value) : null,
+    cost_accommodation: document.getElementById('f-cost-accommodation').value ? parseFloat(document.getElementById('f-cost-accommodation').value) : null,
+    cost_other: document.getElementById('f-cost-other').value ? parseFloat(document.getElementById('f-cost-other').value) : null,
     notes: document.getElementById('f-notes').value || null
   };
 

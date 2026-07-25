@@ -166,11 +166,47 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .checklist-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); }
 .checklist-item input[type=text] { flex: 1; }
 .checklist-item.done label, .checklist-item.done span { text-decoration: line-through; color: var(--text-dim); }
-.checklist-add { display: flex; gap: 8px; margin-top: 8px; }
+.checklist-add { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.checklist-add select { flex: 1 1 200px; }
+.checklist-add input[type=text] { flex: 1 1 200px; }
+.checklist-add button { flex: 0 0 auto; }
 
 .section-title { margin: 18px 0 4px; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---------- Финансы ---------- */
+.fin-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+.fin-cards.fin-cards-2 { grid-template-columns: repeat(2, 1fr); }
+.fin-card { background: var(--panel); border-radius: var(--radius); padding: 14px 16px; }
+.fin-card .label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.fin-card .value { font-size: 19px; font-weight: 700; }
+.fin-card.cost .value { color: var(--warn); }
+.fin-card.profit .value { color: var(--ok); }
+
+.fin-table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: var(--radius); overflow: hidden; margin-bottom: 8px; }
+.fin-table th, .fin-table td { text-align: left; padding: 9px 10px; font-size: 13px; border-bottom: 1px solid var(--border); }
+.fin-table th { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.fin-table tr:last-child td { border-bottom: none; }
+.fin-table td.num, .fin-table th.num { text-align: right; }
+.fin-table tbody tr[data-id] { cursor: pointer; }
+.fin-table tbody tr[data-id]:hover { background: var(--panel-2); }
+.margin-good { color: var(--ok); font-weight: 600; }
+.margin-mid { color: var(--warn); font-weight: 600; }
+
+.overdue-row {
+  background: var(--panel); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 8px;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.overdue-row .who { font-weight: 600; font-size: 13px; }
+.overdue-row .amt { color: var(--warn); font-weight: 600; font-size: 13px; }
+
+.expenses-toolbar { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 10px; gap: 8px; flex-wrap: wrap; }
+.expenses-toolbar .section-title { margin: 0; }
+.footer-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
+
+#f-profit-display { opacity: .85; font-weight: 600; }
 
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }
+  .fin-cards { grid-template-columns: repeat(2, 1fr); }
 }
