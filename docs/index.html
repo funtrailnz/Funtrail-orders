@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Funtrail — Заказы туров</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0f766e" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ Экран входа ============ -->
+  <div id="auth-screen">
+    <div class="auth-box">
+      <h1>Funtrail</h1>
+      <p class="sub">Календарь заказов и напоминания для команды</p>
+      <div class="auth-tabs">
+        <button id="tab-signin" class="active">Войти</button>
+        <button id="tab-signup">Регистрация</button>
+      </div>
+      <label>Email</label>
+      <input type="email" id="auth-email" placeholder="you@funtrail.co.nz" autocomplete="email" />
+      <label>Пароль</label>
+      <input type="password" id="auth-password" placeholder="••••••••" autocomplete="current-password" />
+      <div style="margin-top:16px; display:flex; gap:8px;">
+        <button id="auth-submit" style="flex:1">Войти</button>
+      </div>
+      <div id="auth-message"></div>
+    </div>
+  </div>
+
+  <!-- ============ Основной экран ============ -->
+  <div id="main-screen" style="display:none; flex-direction:column; min-height:100%;">
+    <header>
+      <div class="brand"><img src="icons/icon-192.png" alt="" /><span id="company-name">Funtrail</span></div>
+      <div class="actions">
+        <button class="secondary" id="btn-new-order">+ Заказ</button>
+        <button class="ghost" id="btn-logout">Выйти</button>
+      </div>
+    </header>
+
+    <div class="view-tabs">
+      <button id="tab-calendar" class="active">Календарь</button>
+      <button id="tab-upcoming">Ближайшие</button>
+      <button id="tab-all">Все заказы</button>
+    </div>
+
+    <main>
+      <!-- Вид: календарь -->
+      <div id="view-calendar">
+        <div class="cal-nav">
+          <button class="ghost" id="cal-prev">←</button>
+          <h2 id="cal-title">Месяц</h2>
+          <button class="ghost" id="cal-next">→</button>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+        <div class="day-orders" id="day-orders"></div>
+      </div>
+
+      <!-- Вид: ближайшие заказы -->
+      <div id="view-upcoming" style="display:none;"></div>
+
+      <!-- Вид: все заказы -->
+      <div id="view-all" style="display:none;"></div>
+    </main>
+  </div>
+
+  <!-- ============ Модалка заказа ============ -->
+  <div id="order-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2 id="order-modal-title">Новый заказ</h2>
+
+      <div class="grid2">
+        <div>
+          <label>Дата тура</label>
+          <input type="date" id="f-tour-date" />
+        </div>
+        <div>
+          <label>Время</label>
+          <input type="text" id="f-tour-time" placeholder="08:00" />
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label>Тип тура</label>
+          <select id="f-tour-type">
+            <option value="CHR1">CHR1 — Крайстчерч (Willowbank, Gondola)</option>
+            <option value="CHR2">CHR2 — Акароа (Black Cat Cruise)</option>
+            <option value="CHR3">CHR3 — Артурс-Пасс</option>
+            <option value="custom">Другое</option>
+          </select>
+        </div>
+        <div>
+          <label>Название / комментарий к туру</label>
+          <input type="text" id="f-tour-name" placeholder="напр. VIP-группа" />
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label>Кол-во человек</label>
+          <input type="number" id="f-group-size" min="1" value="1" />
+        </div>
+        <div>
+          <label>Транспорт</label>
+          <select id="f-transport">
+            <option value="">—</option>
+            <option value="Минивэн 8-12 мест">Минивэн 8–12 мест</option>
+            <option value="Легковой автомобиль">Легковой автомобиль</option>
+            <option value="Не выбрано">Не выбрано</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="section-title">Клиент</div>
+      <div class="grid2">
+        <div>
+          <label>Имя клиента</label>
+          <input type="text" id="f-customer-name" placeholder="Иван Иванов" />
+        </div>
+        <div>
+          <label>Телефон</label>
+          <input type="text" id="f-customer-phone" placeholder="+64 21 000 000" />
+        </div>
+      </div>
+      <label>Email</label>
+      <input type="email" id="f-customer-email" placeholder="client@mail.com" />
+
+      <div class="section-title">Оплата и статус</div>
+      <div class="grid2">
+        <div>
+          <label>Статус заказа</label>
+          <select id="f-status">
+            <option value="new">Новый</option>
+            <option value="confirmed">Подтверждён</option>
+            <option value="deposit_paid">Аванс оплачен</option>
+            <option value="paid_full">Оплачен полностью</option>
+            <option value="completed">Завершён</option>
+            <option value="cancelled">Отменён</option>
+          </select>
+        </div>
+        <div>
+          <label>Валюта</label>
+          <input type="text" id="f-currency" value="NZD" />
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Полная стоимость</label>
+          <input type="number" id="f-total-price" step="0.01" />
+        </div>
+        <div>
+          <label>Сумма аванса</label>
+          <input type="number" id="f-deposit-amount" step="0.01" />
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Аванс внести до</label>
+          <input type="date" id="f-deposit-due" />
+        </div>
+        <div>
+          <label style="margin-top:26px;">
+            <input type="checkbox" id="f-deposit-paid" style="width:auto; margin-right:6px;" />
+            Аванс получен
+          </label>
+        </div>
+      </div>
+
+      <div class="section-title">Заметки</div>
+      <textarea id="f-notes" rows="2" placeholder="Особые пожелания, аллергии, детали..."></textarea>
+
+      <div class="section-title">Чек-лист (что нужно сделать)</div>
+      <div class="checklist" id="f-checklist"></div>
+      <div class="checklist-add">
+        <input type="text" id="f-checklist-new" placeholder="напр. Забронировать минивэн" />
+        <button class="secondary" id="f-checklist-add-btn">+</button>
+      </div>
+
+      <div class="modal-footer">
+        <div>
+          <button class="danger" id="f-delete" style="display:none;">Удалить заказ</button>
+        </div>
+        <div class="right">
+          <button class="secondary" id="f-cancel">Отмена</button>
+          <button id="f-save">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
