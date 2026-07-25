@@ -1,0 +1,30 @@
+name: Funtrail daily reminders
+
+on:
+  schedule:
+    # 20:00 UTC = 08:00 Christchurch (NZST, UTC+12) / 09:00 (NZDT, UTC+13)
+    # При переходе на летнее/зимнее время сообщение может прийти на час раньше/позже — не критично.
+    - cron: "0 20 * * *"
+  workflow_dispatch: {} # позволяет запустить вручную из вкладки Actions на GitHub
+
+jobs:
+  send-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r telegram-bot/requirements.txt
+
+      - name: Run reminder script
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REMINDER_DAYS: "3,1,0"
+        run: python telegram-bot/remind.py
