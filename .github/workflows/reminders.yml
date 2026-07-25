@@ -7,6 +7,9 @@ on:
     - cron: "0 20 * * *"
   workflow_dispatch: {} # позволяет запустить вручную из вкладки Actions на GitHub
 
+permissions:
+  contents: write # нужно для автоматического "keep-alive"-коммита ниже
+
 jobs:
   send-reminders:
     runs-on: ubuntu-latest
@@ -29,3 +32,25 @@ jobs:
           TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
           REMINDER_DAYS: "14,7,3,1,0"
         run: python telegram-bot/remind.py
+
+      - name: Keep-alive commit (примерно раз в месяц, чтобы GitHub не отключил расписание через 60 дней без активности в репозитории)
+        run: |
+          mkdir -p .github
+          LAST_DATE="1970-01-01"
+          if [ -f .github/.keepalive ]; then
+            LAST_DATE=$(cat .github/.keepalive | tr -d '[:space:]')
+          fi
+          LAST_EPOCH=$(date -u -d "$LAST_DATE" +%s 2>/dev/null || echo 0)
+          NOW_EPOCH=$(date -u +%s)
+          DAYS_SINCE=$(( (NOW_EPOCH - LAST_EPOCH) / 86400 ))
+          echo "Дней с последнего keep-alive коммита: $DAYS_SINCE"
+          if [ "$DAYS_SINCE" -ge 25 ]; then
+            echo "$(date -u +%Y-%m-%d)" > .github/.keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .github/.keepalive
+            git commit -m "chore: keep-alive (авто, чтобы расписание Actions не отключилось из-за неактивности)"
+            git push
+          else
+            echo "Ещё рано — коммит не нужен (делаем примерно раз в 25+ дней)"
+          fi
