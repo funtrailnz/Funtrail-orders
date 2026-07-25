@@ -3,7 +3,13 @@
 // Данные (заказы) всегда идут через сеть напрямую в Supabase —
 // офлайн-редактирование не поддерживается, только просмотр
 // последней загруженной оболочки.
-const CACHE_NAME = 'funtrail-shell-v1';
+//
+// Стратегия — "сеть в приоритете": при наличии интернета всегда
+// берём свежую версию файла и обновляем кеш; кеш используется только
+// как запасной вариант, если сети нет (офлайн). Так изменения,
+// закоммиченные на GitHub, подхватываются сразу при следующем
+// открытии приложения, без ручной очистки кеша.
+const CACHE_NAME = 'funtrail-shell-v2';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -34,12 +40,12 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((resp) => {
+    fetch(event.request)
+      .then((resp) => {
         const copy = resp.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return resp;
-      }).catch(() => cached);
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });
