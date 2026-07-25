@@ -101,6 +101,28 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .cal-day .dots { display: flex; flex-wrap: wrap; gap: 3px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 
+/* ---------- Чипы заказов в ячейке календаря ---------- */
+/* Цвет = статус (+ аванс для "Подтверждён"), текст = код тура + статус */
+.cal-day .chips { display: flex; flex-direction: column; gap: 3px; }
+.tour-chip {
+  border-radius: 6px; padding: 3px 6px; font-size: 11px; line-height: 1.3;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.tour-chip .tcode { font-weight: 700; }
+.tour-chip .tstatus { opacity: .92; font-weight: 500; }
+.tour-chip.more { text-align: center; font-weight: 600; opacity: .75; background: var(--panel-2); color: var(--text-dim); }
+
+.chip-gray      { background: #475569; color: #f1f5f9; } /* не подтверждён */
+.chip-orange    { background: #9a3412; color: #fde8d2; } /* подтверждён, без аванса */
+.chip-green     { background: #166534; color: #dcfce7; } /* подтверждён/аванс оплачен, аванс получен */
+.chip-paidfull  { background: #0f766e; color: #d1fae5; } /* оплачен полностью */
+.chip-completed { background: #334155; color: #cbd5e1; opacity: .8; } /* завершён — уже не актуален */
+.chip-cancelled { background: #7f1d1d; color: #fecaca; opacity: .7; text-decoration: line-through; } /* отменён */
+
+@media (max-width: 480px) {
+  .tour-chip { font-size: 10px; padding: 2px 5px; }
+}
+
 .status-new { background: #64748b; }
 .status-confirmed { background: #3b82f6; }
 .status-deposit_paid { background: #f59e0b; }
