@@ -101,6 +101,25 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .cal-day .dots { display: flex; flex-wrap: wrap; gap: 3px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; }
 
+/* ---------- Нерабочие дни (выходные/отпуска) ---------- */
+.cal-toolbar { display: flex; justify-content: flex-end; margin: -6px 0 10px; }
+.cal-day.day-off {
+  position: relative;
+  background: repeating-linear-gradient(135deg, #1c1917, #1c1917 8px, #292524 8px, #292524 16px);
+}
+.day-off-badge { position: absolute; top: 4px; right: 6px; font-size: 11px; opacity: .85; }
+.dayoff-banner {
+  background: #451a03; color: #fed7aa; border-radius: 10px; padding: 10px 14px;
+  font-size: 13px; margin-bottom: 12px;
+}
+.modal-hint { color: var(--text-dim); font-size: 13px; margin: -4px 0 12px; }
+.blockedday-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--panel-2); border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; font-size: 13px;
+}
+.blockedday-row button.ghost { padding: 2px 8px; color: var(--text-dim); }
+.warn-line { color: var(--warn); font-size: 13px; margin: -6px 0 10px; }
+
 /* ---------- Чипы заказов в ячейке календаря ---------- */
 /* Цвет = статус (+ аванс для "Подтверждён"), текст = код тура + статус */
 .cal-day .chips { display: flex; flex-direction: column; gap: 3px; }
@@ -210,6 +229,35 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .footer-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
 
 #f-profit-display { opacity: .85; font-weight: 600; }
+
+/* ---------- Партнёры ---------- */
+.secondary-link {
+  display: inline-flex; align-items: center; background: var(--panel-2); color: var(--text);
+  border-radius: 8px; padding: 10px 16px; font-size: 15px; text-decoration: none;
+}
+.secondary-link:hover { filter: brightness(1.1); }
+.partner-card {
+  background: var(--panel); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
+}
+.partner-card:hover { background: var(--panel-2); }
+.partner-card .row1 { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.partner-card .title { font-weight: 600; font-size: 16px; }
+.partner-card .meta { color: var(--text-dim); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+.partner-badge {
+  font-size: 12px; padding: 3px 9px; border-radius: 100px; color: white; white-space: nowrap; background: var(--accent-dark);
+}
+.orderpartners { margin-top: 6px; }
+.orderpartner-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px;
+}
+.orderpartner-row .name { flex: 1 1 auto; font-weight: 600; }
+.orderpartner-row .amt { color: var(--warn); white-space: nowrap; }
+.orderpartner-row .note { color: var(--text-dim); font-size: 13px; flex: 1 1 auto; }
+.orderpartners-add { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.orderpartners-add select { flex: 1 1 200px; }
+.orderpartners-add input[type=number] { flex: 0 1 110px; }
+.orderpartners-add input[type=text] { flex: 1 1 160px; }
+.orderpartners-add button { flex: 0 0 auto; }
 
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }

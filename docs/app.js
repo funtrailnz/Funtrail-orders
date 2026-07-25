@@ -64,6 +64,11 @@ function tourChipClass(o) {
 let orders = [];          // все заказы, загруженные с сервера
 let checklistByOrder = {}; // order_id -> [items]
 let businessExpenses = []; // общебизнес расходы (не привязаны к туру)
+let blockedDays = []; // нерабочие дни: { kind: 'weekday'|'range', weekday, start_date, end_date, note }
+let partners = []; // партнёры: транспорт, гиды, поставщики услуг
+let orderPartnersByOrder = {}; // order_id -> [{ id, partner_id, amount, note }]
+let editingPartnerId = null;
+let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
 let currentMonth = new Date(); currentMonth.setDate(1);
 let financeMonth = new Date(); financeMonth.setDate(1);
 let financeMode = 'month'; // 'month' | 'custom' | 'all' — переключатель периода на вкладке "Финансы"
@@ -85,6 +90,26 @@ const BUSINESS_EXPENSE_CATEGORIES = [
   'Связь/интернет',
   'Прочее'
 ];
+
+const PARTNER_CATEGORIES = ['Транспорт', 'Гид/экскурсовод', 'Проживание', 'Питание', 'Прочее'];
+
+const WEEKDAY_LABELS = { 0: 'Воскресенье', 1: 'Понедельник', 2: 'Вторник', 3: 'Среда', 4: 'Четверг', 5: 'Пятница', 6: 'Суббота' };
+
+// Правила, из-за которых конкретная дата (YYYY-MM-DD) считается нерабочей —
+// либо повторяющийся день недели, либо диапазон дат (отпуск/праздник)
+function blockedRulesFor(dateStr) {
+  if (!dateStr) return [];
+  const weekday = new Date(dateStr + 'T00:00:00').getDay();
+  return blockedDays.filter(b =>
+    (b.kind === 'weekday' && b.weekday === weekday) ||
+    (b.kind === 'range' && dateStr >= b.start_date && dateStr <= b.end_date)
+  );
+}
+
+function blockedRuleLabel(b) {
+  const base = b.kind === 'weekday' ? `Каждую неделю: ${WEEKDAY_LABELS[b.weekday]}` : `${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}`;
+  return b.note ? `${base} (${b.note})` : base;
+}
 
 // Сумма всех расходов по конкретному туру (для расчёта маржи)
 function orderCostTotal(o) {
@@ -197,6 +222,21 @@ async function loadAll() {
   const { data: expenses, error: e3 } = await sb.from('business_expenses').select('*').order('expense_date', { ascending: false });
   if (e3) { console.error(e3); return; } // таблица могла быть ещё не создана — тогда просто не показываем расходы
   businessExpenses = expenses || [];
+
+  const { data: blocked, error: e4 } = await sb.from('blocked_days').select('*');
+  if (e4) { console.error(e4); return; } // таблица могла быть ещё не создана — тогда просто не показываем нерабочие дни
+  blockedDays = blocked || [];
+
+  const { data: partnersData, error: e5 } = await sb.from('partners').select('*').order('name', { ascending: true });
+  if (e5) { console.error(e5); return; } // таблица могла быть ещё не создана — тогда просто не показываем партнёров
+  partners = partnersData || [];
+
+  const { data: orderPartners, error: e6 } = await sb.from('order_partners').select('*');
+  if (e6) { console.error(e6); return; }
+  orderPartnersByOrder = {};
+  (orderPartners || []).forEach(op => {
+    (orderPartnersByOrder[op.order_id] ||= []).push(op);
+  });
 }
 
 function subscribeRealtime() {
@@ -215,13 +255,28 @@ function subscribeRealtime() {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
+  sb.channel('public:blocked_days')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_days' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:partners')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'partners' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:order_partners')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'order_partners' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
 }
 
 // ------------------------------------------------------------
 // Переключение вкладок-видов
 // ------------------------------------------------------------
-const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance') };
-const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance') };
+const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners') };
+const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners') };
 Object.keys(viewTabs).forEach(key => {
   viewTabs[key].onclick = () => {
     activeView = key;
@@ -235,7 +290,8 @@ function renderCurrentView() {
   if (activeView === 'calendar') renderCalendar();
   else if (activeView === 'upcoming') renderUpcoming();
   else if (activeView === 'all') renderAllOrders();
-  else renderFinance();
+  else if (activeView === 'finance') renderFinance();
+  else renderPartners();
 }
 
 // ------------------------------------------------------------
@@ -277,8 +333,12 @@ function renderCalendar() {
   const MAX_CHIPS = 3;
   cells.forEach(c => {
     const el = document.createElement('div');
-    el.className = 'cal-day' + (c.otherMonth ? ' other-month' : '') + (c.dateStr === today ? ' today' : '') + (c.dateStr === selectedDate ? ' selected' : '');
+    const isOff = c.dateStr && blockedRulesFor(c.dateStr).length > 0;
+    el.className = 'cal-day' + (c.otherMonth ? ' other-month' : '') + (c.dateStr === today ? ' today' : '') + (c.dateStr === selectedDate ? ' selected' : '') + (isOff ? ' day-off' : '');
     const num = document.createElement('div'); num.className = 'num'; num.textContent = c.day; el.appendChild(num);
+    if (isOff) {
+      const badge = document.createElement('div'); badge.className = 'day-off-badge'; badge.textContent = '🚫'; el.appendChild(badge);
+    }
     if (c.dateStr) {
       const dayOrders = ordersOn(c.dateStr);
       if (dayOrders.length) {
@@ -308,7 +368,11 @@ function renderCalendar() {
 function renderDayOrders() {
   const box = document.getElementById('day-orders');
   const list = ordersOn(selectedDate);
+  const rules = blockedRulesFor(selectedDate);
   box.innerHTML = `<h3>${fmtDate(selectedDate)}</h3>`;
+  if (rules.length) {
+    box.innerHTML += `<div class="dayoff-banner">🚫 Нерабочий день — ${rules.map(r => escapeHtml(blockedRuleLabel(r))).join('; ')}</div>`;
+  }
   if (!list.length) {
     box.innerHTML += `<div class="empty-hint">Заказов на этот день нет</div>`;
     return;
@@ -335,9 +399,47 @@ function renderUpcoming() {
 function renderAllOrders() {
   const box = document.getElementById('view-all');
   box.innerHTML = '';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'expenses-toolbar';
+  toolbar.innerHTML = `<div></div><button class="secondary" id="btn-export-contacts">⬇ Экспорт контактов</button>`;
+  box.appendChild(toolbar);
+  document.getElementById('btn-export-contacts').onclick = () => exportClientContactsCsv();
+
   const list = [...orders].sort((a,b) => b.tour_date.localeCompare(a.tour_date));
-  if (!list.length) { box.innerHTML = '<div class="empty-hint">Заказов пока нет</div>'; return; }
+  if (!list.length) { box.innerHTML += '<div class="empty-hint">Заказов пока нет</div>'; return; }
   list.forEach(o => box.appendChild(orderCard(o, true)));
+}
+
+// Экспорт контактов клиентов — одна строка на клиента (без дублей),
+// группировка по номеру телефона (если телефона нет — по имени)
+function exportClientContactsCsv() {
+  const byKey = {};
+  orders.forEach(o => {
+    const key = (o.customer_phone || '').trim() || (o.customer_name || '').trim().toLowerCase();
+    if (!key) return; // без имени и телефона запись бесполезна для контактов
+    if (!byKey[key]) byKey[key] = { name: o.customer_name || '', phone: o.customer_phone || '', email: o.customer_email || '', lastDate: o.tour_date, count: 0 };
+    const rec = byKey[key];
+    if (!rec.name && o.customer_name) rec.name = o.customer_name;
+    if (!rec.phone && o.customer_phone) rec.phone = o.customer_phone;
+    if (!rec.email && o.customer_email) rec.email = o.customer_email;
+    if (o.tour_date > rec.lastDate) rec.lastDate = o.tour_date;
+    rec.count++;
+  });
+  const rows = Object.values(byKey).sort((a, b) => b.lastDate.localeCompare(a.lastDate));
+  if (!rows.length) { alert('Нет контактов для экспорта'); return; }
+
+  let csv = 'Имя,Телефон,Email,Последний тур,Всего туров\n';
+  rows.forEach(r => {
+    csv += [csvEscape(r.name), csvEscape(r.phone), csvEscape(r.email), csvEscape(fmtDate(r.lastDate)), r.count].join(',') + '\n';
+  });
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `funtrail-contacts-${todayStr()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ------------------------------------------------------------
@@ -624,6 +726,266 @@ document.getElementById('fe-delete').onclick = async () => {
 };
 
 // ------------------------------------------------------------
+// Модалка нерабочих дней (выходные/отпуска)
+// ------------------------------------------------------------
+const blockedDayModal = document.getElementById('blockedday-modal');
+
+function openBlockedDayModal() {
+  document.getElementById('bd-kind').value = 'weekday';
+  document.getElementById('bd-weekday').value = '0';
+  document.getElementById('bd-start-date').value = '';
+  document.getElementById('bd-end-date').value = '';
+  document.getElementById('bd-note').value = '';
+  toggleBlockedDayKindFields();
+  renderBlockedDayList();
+  blockedDayModal.style.display = 'flex';
+}
+
+function closeBlockedDayModal() {
+  blockedDayModal.style.display = 'none';
+}
+
+function toggleBlockedDayKindFields() {
+  const isRange = document.getElementById('bd-kind').value === 'range';
+  document.getElementById('bd-weekday-wrap').style.display = isRange ? 'none' : '';
+  document.getElementById('bd-range-wrap').style.display = isRange ? '' : 'none';
+}
+
+function renderBlockedDayList() {
+  const box = document.getElementById('blockedday-list');
+  if (!blockedDays.length) {
+    box.innerHTML = `<div class="empty-hint">Нерабочих дней пока не задано</div>`;
+    return;
+  }
+  const sorted = [...blockedDays].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'weekday' ? -1 : 1;
+    if (a.kind === 'weekday') return a.weekday - b.weekday;
+    return (a.start_date || '').localeCompare(b.start_date || '');
+  });
+  box.innerHTML = '';
+  sorted.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'blockedday-row';
+    row.innerHTML = `<span>${escapeHtml(blockedRuleLabel(b))}</span><button class="ghost bd-remove" data-id="${b.id}">✕</button>`;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('.bd-remove').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Удалить это правило нерабочего дня?')) return;
+      await sb.from('blocked_days').delete().eq('id', btn.dataset.id);
+      await loadAll();
+      renderBlockedDayList();
+      renderCurrentView();
+    };
+  });
+}
+
+document.getElementById('btn-blocked-days').onclick = () => openBlockedDayModal();
+document.getElementById('bd-cancel').onclick = () => closeBlockedDayModal();
+document.getElementById('bd-kind').onchange = () => toggleBlockedDayKindFields();
+
+document.getElementById('bd-add-btn').onclick = async () => {
+  const kind = document.getElementById('bd-kind').value;
+  const note = document.getElementById('bd-note').value || null;
+  let payload;
+  if (kind === 'weekday') {
+    payload = { kind: 'weekday', weekday: parseInt(document.getElementById('bd-weekday').value), note: note || '' };
+  } else {
+    let start = document.getElementById('bd-start-date').value;
+    let end = document.getElementById('bd-end-date').value;
+    if (!start || !end) { alert('Укажите обе даты диапазона'); return; }
+    if (start > end) { [start, end] = [end, start]; }
+    payload = { kind: 'range', start_date: start, end_date: end, note: note || '' };
+  }
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from('blocked_days').insert({ ...payload, created_by: user?.id });
+  if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+
+  await loadAll();
+  renderBlockedDayList();
+  renderCurrentView();
+  document.getElementById('bd-note').value = '';
+  document.getElementById('bd-start-date').value = '';
+  document.getElementById('bd-end-date').value = '';
+};
+
+// ------------------------------------------------------------
+// Партнёры (транспорт, гиды, поставщики услуг)
+// ------------------------------------------------------------
+function renderPartners() {
+  const box = document.getElementById('view-partners');
+  box.innerHTML = `
+    <div class="expenses-toolbar">
+      <div class="section-title">Партнёры</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <a class="secondary-link" href="partners-template.csv" download>⬇ Шаблон CSV</a>
+        <button class="secondary" id="btn-import-partners">⬆ Загрузить CSV</button>
+        <input type="file" id="partners-csv-input" accept=".csv" style="display:none;" />
+        <button id="btn-new-partner">+ Партнёр</button>
+      </div>
+    </div>
+    <div id="partners-list"></div>
+  `;
+
+  const list = document.getElementById('partners-list');
+  if (!partners.length) {
+    list.innerHTML = '<div class="empty-hint">Партнёров пока нет — добавьте вручную или загрузите CSV</div>';
+  } else {
+    const sorted = [...partners].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    sorted.forEach(p => list.appendChild(partnerCard(p)));
+  }
+
+  document.getElementById('btn-new-partner').onclick = () => openPartnerModal(null);
+  document.getElementById('btn-import-partners').onclick = () => document.getElementById('partners-csv-input').click();
+  document.getElementById('partners-csv-input').onchange = (e) => {
+    if (e.target.files[0]) importPartnersFromCsv(e.target.files[0]);
+    e.target.value = '';
+  };
+}
+
+function partnerCard(p) {
+  const card = document.createElement('div');
+  card.className = 'partner-card';
+  const contactLine = [p.contact_person, p.phone, p.email].filter(Boolean).join(' · ');
+  card.innerHTML = `
+    <div class="row1">
+      <div class="title">${escapeHtml(p.name)}</div>
+      <span class="badge partner-badge">${escapeHtml(p.category)}</span>
+    </div>
+    ${contactLine ? `<div class="meta">${escapeHtml(contactLine)}</div>` : ''}
+    ${p.standard_price ? `<div class="meta">Стандартная цена/комиссия: ${fmtMoney(p.standard_price)} NZD</div>` : ''}
+    ${p.terms ? `<div class="meta">${escapeHtml(p.terms)}</div>` : ''}
+  `;
+  card.onclick = () => openPartnerModal(p.id);
+  return card;
+}
+
+const partnerModal = document.getElementById('partner-modal');
+
+function openPartnerModal(partnerId) {
+  editingPartnerId = partnerId;
+  const p = partnerId ? partners.find(x => x.id === partnerId) : null;
+  document.getElementById('partner-modal-title').textContent = p ? 'Редактировать партнёра' : 'Новый партнёр';
+  document.getElementById('pt-name').value = p?.name || '';
+  document.getElementById('pt-category').value = p?.category || PARTNER_CATEGORIES[0];
+  document.getElementById('pt-contact-person').value = p?.contact_person || '';
+  document.getElementById('pt-phone').value = p?.phone || '';
+  document.getElementById('pt-email').value = p?.email || '';
+  document.getElementById('pt-standard-price').value = p?.standard_price ?? '';
+  document.getElementById('pt-terms').value = p?.terms || '';
+  document.getElementById('pt-delete').style.display = p ? 'inline-block' : 'none';
+  partnerModal.style.display = 'flex';
+}
+
+function closePartnerModal() {
+  partnerModal.style.display = 'none';
+  editingPartnerId = null;
+}
+
+document.getElementById('pt-cancel').onclick = () => closePartnerModal();
+
+document.getElementById('pt-save').onclick = async () => {
+  const payload = {
+    name: document.getElementById('pt-name').value.trim(),
+    category: document.getElementById('pt-category').value,
+    contact_person: document.getElementById('pt-contact-person').value || null,
+    phone: document.getElementById('pt-phone').value || null,
+    email: document.getElementById('pt-email').value || null,
+    standard_price: document.getElementById('pt-standard-price').value ? parseFloat(document.getElementById('pt-standard-price').value) : null,
+    terms: document.getElementById('pt-terms').value || null
+  };
+  if (!payload.name) { alert('Укажите название партнёра'); return; }
+
+  if (editingPartnerId) {
+    const { error } = await sb.from('partners').update(payload).eq('id', editingPartnerId);
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  } else {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('partners').insert({ ...payload, created_by: user?.id });
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  }
+
+  await loadAll();
+  renderCurrentView();
+  closePartnerModal();
+};
+
+document.getElementById('pt-delete').onclick = async () => {
+  if (!editingPartnerId) return;
+  if (!confirm('Удалить этого партнёра? Привязки к заказам тоже удалятся. Действие необратимо.')) return;
+  await sb.from('partners').delete().eq('id', editingPartnerId);
+  await loadAll();
+  renderCurrentView();
+  closePartnerModal();
+};
+
+// ------------------------------------------------------------
+// Импорт партнёров из CSV — простой парсер (учитывает кавычки и
+// запятые внутри кавычек), сопоставление колонок по заголовку
+// ------------------------------------------------------------
+function parseCsvText(text) {
+  // убираем BOM, если есть
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], next = text[i + 1];
+    if (inQuotes) {
+      if (c === '"' && next === '"') { field += '"'; i++; }
+      else if (c === '"') { inQuotes = false; }
+      else { field += c; }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\r') { /* skip */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else { field += c; }
+    }
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => h.trim().toLowerCase());
+  return rows.slice(1).filter(r => r.some(v => v.trim() !== '')).map(r => {
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = (r[idx] || '').trim(); });
+    return obj;
+  });
+}
+
+function matchPartnerCategory(raw) {
+  const found = PARTNER_CATEGORIES.find(c => c.toLowerCase() === (raw || '').toLowerCase());
+  return found || 'Прочее';
+}
+
+async function importPartnersFromCsv(file) {
+  const text = await file.text();
+  const rows = parseCsvText(text);
+  if (!rows.length) { alert('Файл пуст или не удалось его прочитать'); return; }
+
+  const toInsert = rows.map(r => ({
+    name: r['название'] || r['name'] || '',
+    category: matchPartnerCategory(r['категория'] || r['category']),
+    contact_person: r['контактное лицо'] || r['contact_person'] || null,
+    phone: r['телефон'] || r['phone'] || null,
+    email: r['email'] || null,
+    standard_price: (r['стандартная цена/комиссия'] || r['standard_price']) ? parseFloat(r['стандартная цена/комиссия'] || r['standard_price']) || null : null,
+    terms: r['условия/заметки'] || r['terms'] || null
+  })).filter(r => r.name);
+
+  if (!toInsert.length) { alert('В файле не нашлось ни одной строки с названием партнёра — проверьте, что столбец "Название" заполнен.'); return; }
+
+  if (!confirm(`Найдено ${toInsert.length} партнёров в файле. Добавить их в систему?`)) return;
+
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from('partners').insert(toInsert.map(p => ({ ...p, created_by: user?.id })));
+  if (error) { alert('Ошибка загрузки: ' + error.message); return; }
+
+  await loadAll();
+  renderCurrentView();
+  alert(`Готово — добавлено партнёров: ${toInsert.length}`);
+}
+
+// ------------------------------------------------------------
 // Экспорт финансового отчёта в CSV
 // ------------------------------------------------------------
 function csvEscape(v) {
@@ -716,7 +1078,17 @@ const modal = document.getElementById('order-modal');
 document.getElementById('btn-new-order').onclick = () => openOrderModal(null);
 document.getElementById('f-cancel').onclick = () => closeModal();
 
-function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; }
+function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; }
+
+// Заполняет выпадающий список партнёров в форме заказа актуальными данными
+function populatePartnerSelect() {
+  const sel = document.getElementById('f-partner-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— выбрать партнёра —</option>' +
+    [...partners].sort((a, b) => a.name.localeCompare(b.name))
+      .map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.category)})</option>`).join('');
+  sel.value = current;
+}
 
 function openOrderModal(orderId) {
   editingOrderId = orderId;
@@ -753,8 +1125,30 @@ function openOrderModal(orderId) {
   document.getElementById('f-checklist-new').value = '';
   document.getElementById('f-checklist-new').style.display = 'none';
 
+  populatePartnerSelect();
+  editingOrderPartners = o ? (orderPartnersByOrder[o.id] || []).map(x => ({ ...x })) : [];
+  renderOrderPartnersEditor();
+  document.getElementById('f-partner-select').value = '';
+  document.getElementById('f-partner-amount').value = '';
+  document.getElementById('f-partner-note').value = '';
+
+  updateTourDateWarning();
   modal.style.display = 'flex';
 }
+
+// Предупреждение под датой тура, если она попадает на нерабочий день —
+// не блокирует сохранение, только предупреждает
+function updateTourDateWarning() {
+  const box = document.getElementById('f-tour-date-warning');
+  const rules = blockedRulesFor(document.getElementById('f-tour-date').value);
+  if (rules.length) {
+    box.textContent = '🚫 Нерабочий день — ' + rules.map(blockedRuleLabel).join('; ');
+    box.style.display = '';
+  } else {
+    box.style.display = 'none';
+  }
+}
+document.getElementById('f-tour-date').addEventListener('input', updateTourDateWarning);
 
 // Прибыль по туру считается вживую, пока вводите стоимость/расходы —
 // сама нигде не сохраняется, это просто подсказка
@@ -816,6 +1210,48 @@ document.getElementById('f-checklist-add-btn').onclick = () => {
   renderChecklistEditor();
 };
 
+// ------------------------------------------------------------
+// Партнёры, привязанные к текущему заказу (в форме заказа) —
+// можно добавить сколько угодно, у каждого своя сумма/заметка
+// ------------------------------------------------------------
+function renderOrderPartnersEditor() {
+  const box = document.getElementById('f-partners');
+  if (!editingOrderPartners.length) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Партнёры не добавлены</div>';
+    return;
+  }
+  box.innerHTML = '';
+  editingOrderPartners.forEach((item, idx) => {
+    const p = partners.find(x => x.id === item.partner_id);
+    const row = document.createElement('div');
+    row.className = 'orderpartner-row';
+    row.innerHTML = `
+      <span class="name">${escapeHtml(p ? p.name : 'Партнёр удалён')}</span>
+      <span class="amt">${item.amount ? fmtMoney(item.amount) + ' NZD' : ''}</span>
+      <span class="note">${escapeHtml(item.note || '')}</span>
+      <button class="ghost op-remove" data-idx="${idx}">✕</button>
+    `;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('.op-remove').forEach(btn => btn.onclick = (e) => {
+    const idx = +e.target.dataset.idx;
+    editingOrderPartners.splice(idx, 1);
+    renderOrderPartnersEditor();
+  });
+}
+
+document.getElementById('f-partner-add-btn').onclick = () => {
+  const partnerId = document.getElementById('f-partner-select').value;
+  if (!partnerId) { alert('Выберите партнёра'); return; }
+  const amountVal = document.getElementById('f-partner-amount').value;
+  const note = document.getElementById('f-partner-note').value || null;
+  editingOrderPartners.push({ partner_id: partnerId, amount: amountVal ? parseFloat(amountVal) : null, note, _new: true });
+  document.getElementById('f-partner-select').value = '';
+  document.getElementById('f-partner-amount').value = '';
+  document.getElementById('f-partner-note').value = '';
+  renderOrderPartnersEditor();
+};
+
 document.getElementById('f-save').onclick = async () => {
   const payload = {
     tour_date: document.getElementById('f-tour-date').value,
@@ -843,6 +1279,12 @@ document.getElementById('f-save').onclick = async () => {
 
   if (!payload.tour_date) { alert('Укажите дату тура'); return; }
 
+  const blockRules = blockedRulesFor(payload.tour_date);
+  if (blockRules.length) {
+    const reason = blockRules.map(blockedRuleLabel).join('; ');
+    if (!confirm(`Этот день отмечен как нерабочий — ${reason}.\n\nВсё равно сохранить заказ?`)) return;
+  }
+
   let orderId = editingOrderId;
   if (orderId) {
     const { error } = await sb.from('orders').update(payload).eq('id', orderId);
@@ -864,6 +1306,19 @@ document.getElementById('f-save').onclick = async () => {
       await sb.from('checklist_items').update({ title: item.title, done: item.done, due_date: item.due_date || null }).eq('id', item.id);
     } else {
       await sb.from('checklist_items').insert({ order_id: orderId, title: item.title, done: item.done || false });
+    }
+  }
+
+  // синхронизация привязанных партнёров
+  const originalPartners = orderPartnersByOrder[orderId] || [];
+  const keepPartnerLinkIds = editingOrderPartners.filter(x => x.id).map(x => x.id);
+  const removedPartnerLinks = originalPartners.filter(op => !keepPartnerLinkIds.includes(op.id));
+  for (const r of removedPartnerLinks) await sb.from('order_partners').delete().eq('id', r.id);
+  for (const item of editingOrderPartners) {
+    if (item.id) {
+      await sb.from('order_partners').update({ amount: item.amount, note: item.note }).eq('id', item.id);
+    } else {
+      await sb.from('order_partners').insert({ order_id: orderId, partner_id: item.partner_id, amount: item.amount, note: item.note });
     }
   }
 

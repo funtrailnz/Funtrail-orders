@@ -50,6 +50,7 @@
       <button id="tab-upcoming">Ближайшие</button>
       <button id="tab-all">Все заказы</button>
       <button id="tab-finance">Финансы</button>
+      <button id="tab-partners">Партнёры</button>
     </div>
 
     <main>
@@ -59,6 +60,9 @@
           <button class="ghost" id="cal-prev">←</button>
           <h2 id="cal-title">Месяц</h2>
           <button class="ghost" id="cal-next">→</button>
+        </div>
+        <div class="cal-toolbar">
+          <button class="ghost" id="btn-blocked-days">🚫 Нерабочие дни</button>
         </div>
         <div class="cal-grid" id="cal-grid"></div>
         <div class="day-orders" id="day-orders"></div>
@@ -72,6 +76,9 @@
 
       <!-- Вид: финансы -->
       <div id="view-finance" style="display:none;"></div>
+
+      <!-- Вид: партнёры -->
+      <div id="view-partners" style="display:none;"></div>
     </main>
   </div>
 
@@ -90,6 +97,7 @@
           <input type="text" id="f-tour-time" placeholder="08:00" />
         </div>
       </div>
+      <div id="f-tour-date-warning" class="warn-line" style="display:none;"></div>
 
       <div class="grid2">
         <div>
@@ -245,6 +253,15 @@
         <button class="secondary" id="f-checklist-add-btn">+</button>
       </div>
 
+      <div class="section-title">Партнёры по этому туру</div>
+      <div class="orderpartners" id="f-partners"></div>
+      <div class="orderpartners-add">
+        <select id="f-partner-select"><option value="">— выбрать партнёра —</option></select>
+        <input type="number" id="f-partner-amount" step="0.01" placeholder="Сумма" />
+        <input type="text" id="f-partner-note" placeholder="Заметка (необязательно)" />
+        <button class="secondary" id="f-partner-add-btn">+</button>
+      </div>
+
       <div class="modal-footer">
         <div>
           <button class="danger" id="f-delete" style="display:none;">Удалить заказ</button>
@@ -290,6 +307,107 @@
         <div class="right">
           <button class="secondary" id="fe-cancel">Отмена</button>
           <button id="fe-save">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Модалка нерабочих дней ============ -->
+  <div id="blockedday-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2>Нерабочие дни</h2>
+      <p class="modal-hint">Дни, когда Funtrail не работает — отмечаются в календаре, при создании заказа на такой день появится предупреждение (заказ всё равно можно сохранить).</p>
+
+      <div class="section-title">Текущие правила</div>
+      <div id="blockedday-list"></div>
+
+      <div class="section-title">Добавить</div>
+      <label>Тип</label>
+      <select id="bd-kind">
+        <option value="weekday">Повторяется каждую неделю</option>
+        <option value="range">Диапазон дат (отпуск, праздник)</option>
+      </select>
+
+      <div id="bd-weekday-wrap">
+        <label>День недели</label>
+        <select id="bd-weekday">
+          <option value="1">Понедельник</option>
+          <option value="2">Вторник</option>
+          <option value="3">Среда</option>
+          <option value="4">Четверг</option>
+          <option value="5">Пятница</option>
+          <option value="6">Суббота</option>
+          <option value="0">Воскресенье</option>
+        </select>
+      </div>
+
+      <div class="grid2" id="bd-range-wrap" style="display:none;">
+        <div>
+          <label>С</label>
+          <input type="date" id="bd-start-date" />
+        </div>
+        <div>
+          <label>По</label>
+          <input type="date" id="bd-end-date" />
+        </div>
+      </div>
+
+      <label>Заметка (необязательно)</label>
+      <input type="text" id="bd-note" placeholder="напр. Рождество, отпуск" />
+
+      <div class="modal-footer">
+        <div></div>
+        <div class="right">
+          <button class="secondary" id="bd-cancel">Закрыть</button>
+          <button id="bd-add-btn">+ Добавить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Модалка партнёра ============ -->
+  <div id="partner-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2 id="partner-modal-title">Новый партнёр</h2>
+      <label>Название</label>
+      <input type="text" id="pt-name" placeholder="напр. Queenstown Transfers Ltd" />
+      <div class="grid2">
+        <div>
+          <label>Категория</label>
+          <select id="pt-category">
+            <option value="Транспорт">Транспорт</option>
+            <option value="Гид/экскурсовод">Гид/экскурсовод</option>
+            <option value="Проживание">Проживание</option>
+            <option value="Питание">Питание</option>
+            <option value="Прочее">Прочее</option>
+          </select>
+        </div>
+        <div>
+          <label>Контактное лицо</label>
+          <input type="text" id="pt-contact-person" placeholder="Иван Смирнов" />
+        </div>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Телефон</label>
+          <input type="text" id="pt-phone" placeholder="+64 21 000 000" />
+        </div>
+        <div>
+          <label>Email</label>
+          <input type="email" id="pt-email" placeholder="partner@mail.com" />
+        </div>
+      </div>
+      <label>Стандартная цена/комиссия (NZD, необязательно)</label>
+      <input type="number" id="pt-standard-price" step="0.01" />
+      <label>Условия/заметки</label>
+      <textarea id="pt-terms" rows="3" placeholder="Скидки, особенности сотрудничества..."></textarea>
+      <div class="modal-footer">
+        <div>
+          <button class="danger" id="pt-delete" style="display:none;">Удалить</button>
+        </div>
+        <div class="right">
+          <button class="secondary" id="pt-cancel">Отмена</button>
+          <button id="pt-save">Сохранить</button>
         </div>
       </div>
     </div>
