@@ -29,6 +29,38 @@ const TOUR_LABELS = {
   custom: 'Тур'
 };
 
+// Короткие обозначения тура для тесной ячейки календаря (полное название — в TOUR_LABELS)
+const TOUR_SHORT = {
+  'CHR1.1_ChCh_1_day': 'CHR1.1',
+  'CHR1_ChCh_1_day': 'CHR1',
+  'CHR1_Christchurch_group20': 'CHR1×20',
+  'CHR2.1_Akaroa_1_day_chch-chch': 'CHR2.1',
+  'CHR2_Akaroa_1_day_chch-chch': 'CHR2',
+  'CHR3.1_Arthurs_Pass_1_day_chch-chch': 'CHR3.1',
+  'CHR3_Arthurs_Pass_1_day_chch-chch': 'CHR3',
+  'CHR4.1_Kaikoura_Hanmer_Springs_2days': 'CHR4.1',
+  'CHR6.1_South Island_7_days': 'CHR6.1',
+  custom: 'Тур'
+};
+
+// Цвет ячейки календаря по статусу заказа (плюс аванс для статуса "Подтверждён"):
+//   серый     — заказ ещё не подтверждён
+//   оранжевый — подтверждён, аванс не получен
+//   зелёный   — подтверждён (или "Аванс оплачен"), аванс получен
+//   изумрудный— оплачен полностью
+//   приглушённый — завершён (уже не актуален)
+//   приглушённый красный — отменён
+function tourChipClass(o) {
+  switch (o.status) {
+    case 'cancelled': return 'chip-cancelled';
+    case 'completed': return 'chip-completed';
+    case 'paid_full': return 'chip-paidfull';
+    case 'deposit_paid': return 'chip-green';
+    case 'confirmed': return o.deposit_paid ? 'chip-green' : 'chip-orange';
+    default: return 'chip-gray'; // new и всё, что не предусмотрено выше
+  }
+}
+
 let orders = [];          // все заказы, загруженные с сервера
 let checklistByOrder = {}; // order_id -> [items]
 let currentMonth = new Date(); currentMonth.setDate(1);
@@ -190,9 +222,14 @@ function renderCalendar() {
     const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     cells.push({ day: d, otherMonth: false, dateStr });
   }
-  while (cells.length % 7 !== 0) cells.push({ day: cells.length, otherMonth: true, dateStr: null });
+  // хвост из дней СЛЕДУЮЩЕГО месяца — раньше здесь ошибочно подставлялся
+  // индекс ячейки (cells.length), из-за чего числа уезжали (30, 36, 37...).
+  // Правильно — просто считать 1, 2, 3... для следующего месяца.
+  let nextMonthDay = 1;
+  while (cells.length % 7 !== 0) cells.push({ day: nextMonthDay++, otherMonth: true, dateStr: null });
 
   const today = todayStr();
+  const MAX_CHIPS = 3;
   cells.forEach(c => {
     const el = document.createElement('div');
     el.className = 'cal-day' + (c.otherMonth ? ' other-month' : '') + (c.dateStr === today ? ' today' : '') + (c.dateStr === selectedDate ? ' selected' : '');
@@ -200,9 +237,20 @@ function renderCalendar() {
     if (c.dateStr) {
       const dayOrders = ordersOn(c.dateStr);
       if (dayOrders.length) {
-        const dots = document.createElement('div'); dots.className = 'dots';
-        dayOrders.slice(0, 6).forEach(o => { const dot = document.createElement('div'); dot.className = 'dot status-' + o.status; dots.appendChild(dot); });
-        el.appendChild(dots);
+        const chipsBox = document.createElement('div'); chipsBox.className = 'chips';
+        dayOrders.slice(0, MAX_CHIPS).forEach(o => {
+          const chip = document.createElement('div');
+          chip.className = 'tour-chip ' + tourChipClass(o);
+          chip.innerHTML = `<span class="tcode">${escapeHtml(TOUR_SHORT[o.tour_type] || o.tour_type)}</span><span class="tstatus">${escapeHtml(STATUS_LABELS[o.status] || o.status)}</span>`;
+          chipsBox.appendChild(chip);
+        });
+        if (dayOrders.length > MAX_CHIPS) {
+          const more = document.createElement('div');
+          more.className = 'tour-chip more';
+          more.textContent = `+${dayOrders.length - MAX_CHIPS}`;
+          chipsBox.appendChild(more);
+        }
+        el.appendChild(chipsBox);
       }
       el.onclick = () => { selectedDate = c.dateStr; renderCalendar(); renderDayOrders(); };
     }
