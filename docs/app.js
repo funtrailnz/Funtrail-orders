@@ -17,9 +17,15 @@ const STATUS_LABELS = {
 };
 
 const TOUR_LABELS = {
-  CHR1: 'CHR1 — Крайстчерч',
-  CHR2: 'CHR2 — Акароа',
-  CHR3: 'CHR3 — Артурс-Пасс',
+  'CHR1.1_ChCh_1_day': 'CHR1.1 — Крайстчерч (1 день)',
+  'CHR1_ChCh_1_day': 'CHR1 — Крайстчерч (1 день)',
+  'CHR1_Christchurch_group20': 'CHR1 — Крайстчерч (группа до 20 чел.)',
+  'CHR2.1_Akaroa_1_day_chch-chch': 'CHR2.1 — Акароа (1 день)',
+  'CHR2_Akaroa_1_day_chch-chch': 'CHR2 — Акароа (1 день)',
+  'CHR3.1_Arthurs_Pass_1_day_chch-chch': 'CHR3.1 — Артурс-Пасс (1 день)',
+  'CHR3_Arthurs_Pass_1_day_chch-chch': 'CHR3 — Артурс-Пасс (1 день)',
+  'CHR4.1_Kaikoura_Hanmer_Springs_2days': 'CHR4.1 — Кайкоура + Ханмер-Спрингс (2 дня)',
+  'CHR6.1_South Island_7_days': 'CHR6.1 — Южный остров (7 дней)',
   custom: 'Тур'
 };
 
@@ -301,7 +307,7 @@ function openOrderModal(orderId) {
 
   document.getElementById('f-tour-date').value = o?.tour_date || selectedDate || todayStr();
   document.getElementById('f-tour-time').value = o?.tour_time || '';
-  document.getElementById('f-tour-type').value = o?.tour_type || 'CHR1';
+  document.getElementById('f-tour-type').value = o?.tour_type || 'CHR1_ChCh_1_day';
   document.getElementById('f-tour-name').value = o?.tour_name || '';
   document.getElementById('f-group-size').value = o?.group_size || 1;
   document.getElementById('f-transport').value = o?.transport || '';
