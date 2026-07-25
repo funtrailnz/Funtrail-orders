@@ -174,6 +174,12 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .section-title { margin: 18px 0 4px; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
 
 /* ---------- Финансы ---------- */
+.fin-mode-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
+.fin-mode-toggle button { background: var(--panel-2); color: var(--text-dim); padding: 7px 14px; font-size: 13px; }
+.fin-mode-toggle button.active { background: var(--accent-dark); color: white; }
+.fin-range-picker { display: flex; gap: 14px; align-items: flex-end; margin: 10px 0 14px; flex-wrap: wrap; }
+.fin-range-picker > div { flex: 1 1 140px; }
+.fin-range-picker label { margin: 0 0 4px; }
 .fin-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
 .fin-cards.fin-cards-2 { grid-template-columns: repeat(2, 1fr); }
 .fin-card { background: var(--panel); border-radius: var(--radius); padding: 14px 16px; }

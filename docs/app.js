@@ -66,6 +66,9 @@ let checklistByOrder = {}; // order_id -> [items]
 let businessExpenses = []; // общебизнес расходы (не привязаны к туру)
 let currentMonth = new Date(); currentMonth.setDate(1);
 let financeMonth = new Date(); financeMonth.setDate(1);
+let financeMode = 'month'; // 'month' | 'custom' | 'all' — переключатель периода на вкладке "Финансы"
+let financeCustomFrom = null; // 'YYYY-MM-DD', задаётся при первом открытии режима "Период"
+let financeCustomTo = null;
 let selectedDate = todayStr();
 let activeView = 'calendar';
 let editingOrderId = null;
@@ -342,19 +345,44 @@ function renderAllOrders() {
 // ------------------------------------------------------------
 function renderFinance() {
   const box = document.getElementById('view-finance');
-  const { start, end } = monthRange(financeMonth);
-  const monthOrders = orders.filter(o => o.tour_date >= start && o.tour_date <= end && o.status !== 'cancelled');
-  const monthExpenses = businessExpenses.filter(e => e.expense_date >= start && e.expense_date <= end);
 
-  const revenue = monthOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
-  const tourCosts = monthOrders.reduce((s, o) => s + orderCostTotal(o), 0);
-  const bizCosts = monthExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  // При первом переключении в режим "Период" — задать разумный диапазон по умолчанию
+  if (financeMode === 'custom' && (!financeCustomFrom || !financeCustomTo)) {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    financeCustomFrom = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`;
+    financeCustomTo = todayStr();
+  }
+
+  let periodOrders, periodExpenses, periodLabel, filenameSuffix;
+  if (financeMode === 'all') {
+    periodOrders = orders.filter(o => o.status !== 'cancelled');
+    periodExpenses = businessExpenses.slice();
+    periodLabel = 'За всё время';
+    filenameSuffix = 'all-time';
+  } else if (financeMode === 'custom') {
+    const from = financeCustomFrom, to = financeCustomTo;
+    periodOrders = orders.filter(o => o.tour_date >= from && o.tour_date <= to && o.status !== 'cancelled');
+    periodExpenses = businessExpenses.filter(e => e.expense_date >= from && e.expense_date <= to);
+    periodLabel = `${fmtDate(from)} – ${fmtDate(to)}`;
+    filenameSuffix = `${from}_${to}`;
+  } else {
+    const { start, end } = monthRange(financeMonth);
+    periodOrders = orders.filter(o => o.tour_date >= start && o.tour_date <= end && o.status !== 'cancelled');
+    periodExpenses = businessExpenses.filter(e => e.expense_date >= start && e.expense_date <= end);
+    periodLabel = financeMonth.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+    filenameSuffix = `${financeMonth.getFullYear()}-${String(financeMonth.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  const revenue = periodOrders.reduce((s, o) => s + (Number(o.total_price) || 0), 0);
+  const tourCosts = periodOrders.reduce((s, o) => s + orderCostTotal(o), 0);
+  const bizCosts = periodExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const profit = revenue - tourCosts - bizCosts;
-  const avgCheck = monthOrders.length ? revenue / monthOrders.length : 0;
+  const avgCheck = periodOrders.length ? revenue / periodOrders.length : 0;
 
   // прибыльность по маршрутам
   const byType = {};
-  monthOrders.forEach(o => {
+  periodOrders.forEach(o => {
     const key = o.tour_type || 'custom';
     if (!byType[key]) byType[key] = { count: 0, revenue: 0, cost: 0 };
     byType[key].count++;
@@ -369,7 +397,37 @@ function renderFinance() {
     }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  // просроченные авансы — всегда "на сейчас", независимо от выбранного месяца
+  // динамика по месяцам — в режимах "Период" и "Всё время", чтобы видеть рост бизнеса
+  let monthlyRows = [];
+  if (financeMode === 'all' || financeMode === 'custom') {
+    const monthlySourceOrders = financeMode === 'all' ? orders.filter(o => o.status !== 'cancelled') : periodOrders;
+    const monthlySourceExpenses = financeMode === 'all' ? businessExpenses : periodExpenses;
+    const byMonth = {};
+    monthlySourceOrders.forEach(o => {
+      const key = (o.tour_date || '').slice(0, 7);
+      if (!key) return;
+      if (!byMonth[key]) byMonth[key] = { revenue: 0, cost: 0, biz: 0, count: 0 };
+      byMonth[key].revenue += Number(o.total_price) || 0;
+      byMonth[key].cost += orderCostTotal(o);
+      byMonth[key].count++;
+    });
+    monthlySourceExpenses.forEach(e => {
+      const key = (e.expense_date || '').slice(0, 7);
+      if (!key) return;
+      if (!byMonth[key]) byMonth[key] = { revenue: 0, cost: 0, biz: 0, count: 0 };
+      byMonth[key].biz += Number(e.amount) || 0;
+    });
+    monthlyRows = Object.entries(byMonth)
+      .map(([key, v]) => ({
+        key,
+        label: new Date(key + '-01T00:00:00').toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }),
+        revenue: v.revenue, tourCost: v.cost, biz: v.biz, count: v.count,
+        profit: v.revenue - v.cost - v.biz
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  // просроченные авансы — всегда "на сейчас", независимо от выбранного периода
   const today = todayStr();
   const overdue = orders.filter(o =>
     o.status !== 'cancelled' && o.status !== 'completed' &&
@@ -377,11 +435,31 @@ function renderFinance() {
   );
 
   box.innerHTML = `
+    <div class="fin-mode-toggle">
+      <button class="${financeMode === 'month' ? 'active' : ''}" id="fin-mode-month">Месяц</button>
+      <button class="${financeMode === 'custom' ? 'active' : ''}" id="fin-mode-custom">Период</button>
+      <button class="${financeMode === 'all' ? 'active' : ''}" id="fin-mode-all">Всё время</button>
+    </div>
+
+    ${financeMode === 'month' ? `
     <div class="cal-nav">
       <button class="ghost" id="fin-prev">←</button>
-      <h2>${financeMonth.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}</h2>
+      <h2>${periodLabel}</h2>
       <button class="ghost" id="fin-next">→</button>
-    </div>
+    </div>` : financeMode === 'custom' ? `
+    <div class="fin-range-picker">
+      <div>
+        <label>С</label>
+        <input type="date" id="fin-custom-from" value="${financeCustomFrom}" />
+      </div>
+      <div>
+        <label>По</label>
+        <input type="date" id="fin-custom-to" value="${financeCustomTo}" />
+      </div>
+    </div>` : `
+    <div class="cal-nav" style="justify-content:center;">
+      <h2 style="text-transform:none;">${periodLabel}</h2>
+    </div>`}
 
     <div class="fin-cards">
       <div class="fin-card"><div class="label">Выручка</div><div class="value">${fmtMoney(revenue)} NZD</div></div>
@@ -390,9 +468,29 @@ function renderFinance() {
       <div class="fin-card profit"><div class="label">Чистая прибыль</div><div class="value">${fmtMoney(profit)} NZD</div></div>
     </div>
     <div class="fin-cards fin-cards-2">
-      <div class="fin-card"><div class="label">Туров за месяц</div><div class="value">${monthOrders.length}</div></div>
+      <div class="fin-card"><div class="label">Туров ${financeMode === 'month' ? 'за месяц' : (financeMode === 'all' ? 'всего' : 'за период')}</div><div class="value">${periodOrders.length}</div></div>
       <div class="fin-card"><div class="label">Средний чек</div><div class="value">${fmtMoney(avgCheck)} NZD</div></div>
     </div>
+
+    ${(financeMode === 'all' || financeMode === 'custom') ? `
+    <div class="section-title">Динамика по месяцам</div>
+    ${monthlyRows.length ? `
+    <table class="fin-table">
+      <thead><tr><th>Месяц</th><th class="num">Туров</th><th class="num">Выручка</th><th class="num">Расходы по турам</th><th class="num">Общебизнес</th><th class="num">Прибыль</th></tr></thead>
+      <tbody>
+        ${monthlyRows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.label)}</td>
+            <td class="num">${r.count}</td>
+            <td class="num">${fmtMoney(r.revenue)}</td>
+            <td class="num">${fmtMoney(r.tourCost)}</td>
+            <td class="num">${fmtMoney(r.biz)}</td>
+            <td class="num">${fmtMoney(r.profit)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>` : `<div class="empty-hint">Данных пока нет</div>`}
+    ` : ''}
 
     <div class="section-title">Прибыльность по маршрутам</div>
     ${byTypeRows.length ? `
@@ -410,7 +508,7 @@ function renderFinance() {
           </tr>
         `).join('')}
       </tbody>
-    </table>` : `<div class="empty-hint">Нет заказов за этот месяц</div>`}
+    </table>` : `<div class="empty-hint">Нет заказов за этот период</div>`}
 
     <div class="section-title">Непогашенные авансы</div>
     ${overdue.length ? overdue.map(o => `
@@ -424,11 +522,11 @@ function renderFinance() {
       <div class="section-title">Общебизнес расходы</div>
       <button class="secondary" id="fin-add-expense">+ Добавить расход</button>
     </div>
-    ${monthExpenses.length ? `
+    ${periodExpenses.length ? `
     <table class="fin-table">
       <thead><tr><th>Дата</th><th>Категория</th><th>Заметка</th><th class="num">Сумма</th></tr></thead>
       <tbody>
-        ${monthExpenses.map(e => `
+        ${periodExpenses.map(e => `
           <tr class="fin-expense-row" data-id="${e.id}">
             <td>${fmtDate(e.expense_date)}</td>
             <td>${escapeHtml(e.category)}</td>
@@ -437,17 +535,34 @@ function renderFinance() {
           </tr>
         `).join('')}
       </tbody>
-    </table>` : `<div class="empty-hint">Расходов за этот месяц нет</div>`}
+    </table>` : `<div class="empty-hint">Расходов за этот период нет</div>`}
 
     <div class="footer-actions">
-      <button class="secondary" id="fin-export-csv">⬇ Экспорт в CSV за этот месяц</button>
+      <button class="secondary" id="fin-export-csv">⬇ Экспорт в CSV${financeMode === 'all' ? ' за всё время' : (financeMode === 'custom' ? ' за период' : ' за этот месяц')}</button>
     </div>
   `;
 
-  document.getElementById('fin-prev').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() - 1); renderFinance(); };
-  document.getElementById('fin-next').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() + 1); renderFinance(); };
+  document.getElementById('fin-mode-month').onclick = () => { financeMode = 'month'; renderFinance(); };
+  document.getElementById('fin-mode-custom').onclick = () => { financeMode = 'custom'; renderFinance(); };
+  document.getElementById('fin-mode-all').onclick = () => { financeMode = 'all'; renderFinance(); };
+  if (financeMode === 'month') {
+    document.getElementById('fin-prev').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() - 1); renderFinance(); };
+    document.getElementById('fin-next').onclick = () => { financeMonth.setMonth(financeMonth.getMonth() + 1); renderFinance(); };
+  }
+  if (financeMode === 'custom') {
+    document.getElementById('fin-custom-from').onchange = (e) => {
+      financeCustomFrom = e.target.value || financeCustomFrom;
+      if (financeCustomFrom > financeCustomTo) financeCustomTo = financeCustomFrom;
+      renderFinance();
+    };
+    document.getElementById('fin-custom-to').onchange = (e) => {
+      financeCustomTo = e.target.value || financeCustomTo;
+      if (financeCustomTo < financeCustomFrom) financeCustomFrom = financeCustomTo;
+      renderFinance();
+    };
+  }
   document.getElementById('fin-add-expense').onclick = () => openExpenseModal(null);
-  document.getElementById('fin-export-csv').onclick = () => exportFinanceCsv(monthOrders, monthExpenses, financeMonth);
+  document.getElementById('fin-export-csv').onclick = () => exportFinanceCsv(periodOrders, periodExpenses, periodLabel, filenameSuffix);
   box.querySelectorAll('.fin-expense-row').forEach(row => {
     row.onclick = () => openExpenseModal(row.dataset.id);
   });
@@ -517,14 +632,13 @@ function csvEscape(v) {
   return s;
 }
 
-function exportFinanceCsv(monthOrders, monthExpenses, monthDate) {
-  const monthLabel = monthDate.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+function exportFinanceCsv(periodOrders, periodExpenses, periodLabel, filenameSuffix) {
   const rows = [];
-  rows.push([`Funtrail — финансовый отчёт за ${monthLabel}`]);
+  rows.push([`Funtrail — финансовый отчёт (${periodLabel})`]);
   rows.push([]);
   rows.push(['ЗАКАЗЫ']);
   rows.push(['Дата тура', 'Клиент', 'Маршрут', 'Статус', 'Стоимость', 'Валюта', 'Аванс', 'Транспорт', 'Гид', 'Билеты', 'Проживание', 'Прочее', 'Расходы итого', 'Прибыль']);
-  monthOrders.forEach(o => {
+  periodOrders.forEach(o => {
     const cost = orderCostTotal(o);
     rows.push([
       o.tour_date, o.customer_name || '', TOUR_LABELS[o.tour_type] || o.tour_type, STATUS_LABELS[o.status] || o.status,
@@ -536,7 +650,7 @@ function exportFinanceCsv(monthOrders, monthExpenses, monthDate) {
   rows.push([]);
   rows.push(['ОБЩЕБИЗНЕС РАСХОДЫ']);
   rows.push(['Дата', 'Категория', 'Заметка', 'Сумма', 'Валюта']);
-  monthExpenses.forEach(e => {
+  periodExpenses.forEach(e => {
     rows.push([e.expense_date, e.category, e.note || '', e.amount, e.currency || 'NZD']);
   });
 
@@ -545,7 +659,7 @@ function exportFinanceCsv(monthOrders, monthExpenses, monthDate) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `funtrail-finance-${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, '0')}.csv`;
+  a.download = `funtrail-finance-${filenameSuffix}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
