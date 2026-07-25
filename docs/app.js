@@ -208,35 +208,46 @@ async function bootAfterLogin() {
 // Загрузка данных
 // ------------------------------------------------------------
 async function loadAll() {
+  // Важно: каждая таблица загружается независимо — ошибка на одной
+  // (например, ещё не выполненная миграция) не должна обрывать загрузку
+  // остальных. Раньше здесь стоял ранний return при любой ошибке, из-за
+  // чего отсутствие ОДНОЙ таблицы (напр. blocked_days) незаметно ломало
+  // загрузку ВСЕХ таблиц, объявленных ниже неё (напр. partners) — заказ
+  // партнёра как будто "не сохранялся", хотя на самом деле просто не
+  // обновлялся список после сохранения.
   const { data: ordersData, error: e1 } = await sb.from('orders').select('*').order('tour_date', { ascending: true });
-  if (e1) { console.error(e1); alert('Ошибка загрузки заказов: ' + e1.message); return; }
-  orders = ordersData || [];
+  if (e1) { console.error(e1); alert('Ошибка загрузки заказов: ' + e1.message); }
+  orders = ordersData || orders;
 
   const { data: items, error: e2 } = await sb.from('checklist_items').select('*').order('created_at', { ascending: true });
-  if (e2) { console.error(e2); return; }
-  checklistByOrder = {};
-  (items || []).forEach(it => {
-    (checklistByOrder[it.order_id] ||= []).push(it);
-  });
+  if (e2) { console.error(e2); }
+  else {
+    checklistByOrder = {};
+    (items || []).forEach(it => {
+      (checklistByOrder[it.order_id] ||= []).push(it);
+    });
+  }
 
   const { data: expenses, error: e3 } = await sb.from('business_expenses').select('*').order('expense_date', { ascending: false });
-  if (e3) { console.error(e3); return; } // таблица могла быть ещё не создана — тогда просто не показываем расходы
-  businessExpenses = expenses || [];
+  if (e3) { console.error(e3); } // таблица могла быть ещё не создана — тогда просто не показываем расходы
+  else businessExpenses = expenses || [];
 
   const { data: blocked, error: e4 } = await sb.from('blocked_days').select('*');
-  if (e4) { console.error(e4); return; } // таблица могла быть ещё не создана — тогда просто не показываем нерабочие дни
-  blockedDays = blocked || [];
+  if (e4) { console.error(e4); } // таблица могла быть ещё не создана — тогда просто не показываем нерабочие дни
+  else blockedDays = blocked || [];
 
   const { data: partnersData, error: e5 } = await sb.from('partners').select('*').order('name', { ascending: true });
-  if (e5) { console.error(e5); return; } // таблица могла быть ещё не создана — тогда просто не показываем партнёров
-  partners = partnersData || [];
+  if (e5) { console.error(e5); } // таблица могла быть ещё не создана — тогда просто не показываем партнёров
+  else partners = partnersData || [];
 
   const { data: orderPartners, error: e6 } = await sb.from('order_partners').select('*');
-  if (e6) { console.error(e6); return; }
-  orderPartnersByOrder = {};
-  (orderPartners || []).forEach(op => {
-    (orderPartnersByOrder[op.order_id] ||= []).push(op);
-  });
+  if (e6) { console.error(e6); }
+  else {
+    orderPartnersByOrder = {};
+    (orderPartners || []).forEach(op => {
+      (orderPartnersByOrder[op.order_id] ||= []).push(op);
+    });
+  }
 }
 
 function subscribeRealtime() {
@@ -818,9 +829,10 @@ function renderPartners() {
     <div class="expenses-toolbar">
       <div class="section-title">Партнёры</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <a class="secondary-link" href="partners-template.csv" download>⬇ Шаблон CSV</a>
-        <button class="secondary" id="btn-import-partners">⬆ Загрузить CSV</button>
-        <input type="file" id="partners-csv-input" accept=".csv" style="display:none;" />
+        <a class="secondary-link" href="partners-template.xlsx" download>⬇ Шаблон XLSX</a>
+        <button class="secondary" id="btn-export-partners">⬇ Экспорт партнёров</button>
+        <button class="secondary" id="btn-import-partners">⬆ Загрузить XLSX</button>
+        <input type="file" id="partners-xlsx-input" accept=".xlsx,.xls" style="display:none;" />
         <button id="btn-new-partner">+ Партнёр</button>
       </div>
     </div>
@@ -829,16 +841,17 @@ function renderPartners() {
 
   const list = document.getElementById('partners-list');
   if (!partners.length) {
-    list.innerHTML = '<div class="empty-hint">Партнёров пока нет — добавьте вручную или загрузите CSV</div>';
+    list.innerHTML = '<div class="empty-hint">Партнёров пока нет — добавьте вручную или загрузите XLSX</div>';
   } else {
     const sorted = [...partners].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
     sorted.forEach(p => list.appendChild(partnerCard(p)));
   }
 
   document.getElementById('btn-new-partner').onclick = () => openPartnerModal(null);
-  document.getElementById('btn-import-partners').onclick = () => document.getElementById('partners-csv-input').click();
-  document.getElementById('partners-csv-input').onchange = (e) => {
-    if (e.target.files[0]) importPartnersFromCsv(e.target.files[0]);
+  document.getElementById('btn-export-partners').onclick = () => exportPartnersXlsx();
+  document.getElementById('btn-import-partners').onclick = () => document.getElementById('partners-xlsx-input').click();
+  document.getElementById('partners-xlsx-input').onchange = (e) => {
+    if (e.target.files[0]) importPartnersFromXlsx(e.target.files[0]);
     e.target.value = '';
   };
 }
@@ -920,47 +933,28 @@ document.getElementById('pt-delete').onclick = async () => {
 };
 
 // ------------------------------------------------------------
-// Импорт партнёров из CSV — простой парсер (учитывает кавычки и
-// запятые внутри кавычек), сопоставление колонок по заголовку
+// Импорт/экспорт партнёров в формате XLSX (через библиотеку SheetJS,
+// подключена в index.html) — сопоставление колонок по заголовку,
+// принимает как русские названия столбцов, так и английские алиасы
 // ------------------------------------------------------------
-function parseCsvText(text) {
-  // убираем BOM, если есть
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-  const rows = [];
-  let row = [], field = '', inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i], next = text[i + 1];
-    if (inQuotes) {
-      if (c === '"' && next === '"') { field += '"'; i++; }
-      else if (c === '"') { inQuotes = false; }
-      else { field += c; }
-    } else {
-      if (c === '"') inQuotes = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\r') { /* skip */ }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-      else { field += c; }
-    }
-  }
-  if (field.length || row.length) { row.push(field); rows.push(row); }
-  if (!rows.length) return [];
-  const headers = rows[0].map(h => h.trim().toLowerCase());
-  return rows.slice(1).filter(r => r.some(v => v.trim() !== '')).map(r => {
-    const obj = {};
-    headers.forEach((h, idx) => { obj[h] = (r[idx] || '').trim(); });
-    return obj;
-  });
-}
-
 function matchPartnerCategory(raw) {
   const found = PARTNER_CATEGORIES.find(c => c.toLowerCase() === (raw || '').toLowerCase());
   return found || 'Прочее';
 }
 
-async function importPartnersFromCsv(file) {
-  const text = await file.text();
-  const rows = parseCsvText(text);
-  if (!rows.length) { alert('Файл пуст или не удалось его прочитать'); return; }
+async function importPartnersFromXlsx(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  if (!rawRows.length) { alert('Файл пуст или не удалось его прочитать'); return; }
+
+  // ключи из XLSX приходят как есть из заголовка — нормализуем к нижнему регистру
+  const rows = rawRows.map(r => {
+    const obj = {};
+    Object.keys(r).forEach(k => { obj[String(k).trim().toLowerCase()] = String(r[k]).trim(); });
+    return obj;
+  });
 
   const toInsert = rows.map(r => ({
     name: r['название'] || r['name'] || '',
@@ -983,6 +977,27 @@ async function importPartnersFromCsv(file) {
   await loadAll();
   renderCurrentView();
   alert(`Готово — добавлено партнёров: ${toInsert.length}`);
+}
+
+// Экспорт всех текущих партнёров в XLSX — тот же набор колонок, что и в шаблоне
+function exportPartnersXlsx() {
+  if (!partners.length) { alert('Партнёров пока нет — нечего экспортировать'); return; }
+  const rows = [...partners]
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+    .map(p => ({
+      'Название': p.name,
+      'Категория': p.category,
+      'Контактное лицо': p.contact_person || '',
+      'Телефон': p.phone || '',
+      'Email': p.email || '',
+      'Стандартная цена/комиссия': p.standard_price ?? '',
+      'Условия/заметки': p.terms || ''
+    }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 14 }, { wch: 36 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Партнёры');
+  XLSX.writeFile(wb, `funtrail-partners-${todayStr()}.xlsx`);
 }
 
 // ------------------------------------------------------------
