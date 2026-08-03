@@ -79,8 +79,8 @@ header .brand img { width: 28px; height: 28px; border-radius: 6px; }
 header .actions { display: flex; gap: 8px; }
 
 /* ---------- View tabs ---------- */
-.view-tabs { display: flex; gap: 8px; padding: 10px 18px 0; }
-.view-tabs button { background: transparent; color: var(--text-dim); border-bottom: 2px solid transparent; border-radius: 0; }
+.view-tabs { display: flex; gap: 8px; padding: 10px 18px 0; overflow-x: auto; }
+.view-tabs button { background: transparent; color: var(--text-dim); border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; flex-shrink: 0; }
 .view-tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
 
 main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 0 auto; }
@@ -264,3 +264,58 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
   .cal-day { min-height: 52px; }
   .fin-cards { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ------------------------------------------------------------
+   Чек-лист регистрации LTD (общий с партнёром)
+------------------------------------------------------------ */
+.ltd-checklist { max-width: 760px; margin: 0 auto; }
+.ltd-title { color: var(--text); font-size: 20px; font-weight: 700; margin: 0 0 2px; }
+.ltd-subtitle { color: var(--text-dim); font-style: italic; font-size: 13px; margin: 0 0 16px; }
+.ltd-progress-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 18px; display: flex; align-items: center; gap: 16px;
+}
+.ltd-progress-ring { flex-shrink: 0; width: 56px; height: 56px; position: relative; }
+.ltd-progress-ring svg { transform: rotate(-90deg); }
+.ltd-progress-ring circle { fill: none; stroke-width: 6; }
+.ltd-progress-ring .bg { stroke: var(--panel-2); }
+.ltd-progress-ring .fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset 0.4s; }
+.ltd-progress-ring .pct {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: bold; color: var(--text);
+}
+.ltd-progress-text { font-size: 13px; color: var(--text-dim); }
+.ltd-progress-text b { color: var(--text); }
+.ltd-names { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.ltd-names input { flex: 1; min-width: 160px; }
+.ltd-section {
+  margin-bottom: 16px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.ltd-section-header {
+  background: var(--panel-2); padding: 10px 14px; border-bottom: 2px solid var(--accent);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.ltd-step { color: var(--accent); font-weight: bold; font-size: 14px; }
+.ltd-section-title { color: var(--text); font-weight: 600; font-size: 15px; }
+.ltd-items { padding: 4px 14px 8px; }
+.ltd-item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 2px;
+  border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.ltd-item:last-child { border-bottom: none; }
+.ltd-checkbox {
+  flex-shrink: 0; width: 19px; height: 19px; border: 2px solid var(--text-dim); border-radius: 4px;
+  margin-top: 2px; display: flex; align-items: center; justify-content: center; transition: all 0.15s; background: transparent;
+}
+.ltd-checkbox.checked { background: var(--ok); border-color: var(--ok); }
+.ltd-checkbox.checked::after { content: "✓"; color: #06210f; font-size: 12px; font-weight: bold; }
+.ltd-item-text { font-size: 14px; line-height: 1.4; color: var(--text); }
+.ltd-item.done .ltd-item-text { color: var(--text-dim); text-decoration: line-through; }
+.ltd-item-note { display: block; font-size: 12px; color: var(--text-dim); font-style: italic; margin-top: 2px; }
+.ltd-note-box {
+  margin: 4px 14px 12px; background: var(--panel-2); border: 1px solid var(--warn);
+  border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; color: var(--text);
+}
+.ltd-note-box b { color: var(--warn); }
+.ltd-footer { text-align: center; color: var(--text-dim); font-size: 12px; font-style: italic; margin-top: 20px; }

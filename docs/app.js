@@ -79,6 +79,7 @@ let activeView = 'calendar';
 let editingOrderId = null;
 let editingChecklist = []; // рабочая копия чек-листа в открытой модалке
 let editingExpenseId = null;
+let ltdChecklist = {}; // общий чек-лист регистрации LTD (payload из таблицы ltd_checklist), одна запись на весь бизнес
 
 // Статьи расходов, которые реально ведёт команда (используется в модалке расхода)
 const BUSINESS_EXPENSE_CATEGORIES = [
@@ -94,6 +95,70 @@ const BUSINESS_EXPENSE_CATEGORIES = [
 const PARTNER_CATEGORIES = ['Транспорт', 'Гид/экскурсовод', 'Проживание', 'Питание', 'Прочее'];
 
 const WEEKDAY_LABELS = { 0: 'Воскресенье', 1: 'Понедельник', 2: 'Вторник', 3: 'Среда', 4: 'Четверг', 5: 'Пятница', 6: 'Суббота' };
+
+// Чек-лист регистрации LTD в Новой Зеландии — общий для обоих партнёров,
+// источник: New Zealand Companies Office. Справочно, не является юридической
+// консультацией. Идентификаторы пунктов (id) стабильны — не менять при правках
+// текста, иначе уже отмеченные пункты у пользователей "потеряются".
+const LTD_CHECKLIST_SECTIONS = [
+  { step: 1, title: 'RealMe-логин', items: [
+    { id: '1-1', text: 'Партнёр 1 создаёт RealMe-логин на realme.govt.nz' },
+    { id: '1-2', text: 'Партнёр 2 создаёт RealMe-логин на realme.govt.nz' }
+  ]},
+  { step: 2, title: 'Аккаунт в Companies Office', items: [
+    { id: '2-1', text: 'Один из партнёров создаёт online services account на companiesoffice.govt.nz через свой RealMe-логин' }
+  ]},
+  { step: 3, title: 'Проверка и резервирование названия', items: [
+    { id: '3-1', text: 'Проверить название через ONECheck (business.govt.nz) — компании, домены, товарные знаки' },
+    { id: '3-2', text: 'Подать заявку на резервирование имени', note: 'NZD 10 + GST, действует 20 рабочих дней' }
+  ]},
+  { step: 4, title: 'Договориться о ключевых пунктах (до подачи заявки)', items: [
+    { id: '4-1', text: 'Кто директор(а) — оба партнёра или один' },
+    { id: '4-2', text: 'Подтверждено распределение акций — 50/50' },
+    { id: '4-3', text: 'Определён адрес регистрации (физический NZ-адрес, не абонентский ящик)' },
+    { id: '4-4', text: 'Решено, нужен ли constitution (устав)', note: 'при 50/50 — рекомендуется, с механизмом разрешения дедлока' }
+  ], note: 'При равных долях 50/50 стандартные правила Companies Act 1993 не решают ситуацию разногласий между партнёрами — стоит заранее прописать механизм в уставе или акционерном соглашении.' },
+  { step: 5, title: 'Данные по каждому партнёру', items: [
+    { id: '5-1', text: 'Полное имя, дата рождения, адрес проживания — партнёр 1' },
+    { id: '5-2', text: 'Полное имя, дата рождения, адрес проживания — партнёр 2' },
+    { id: '5-3', text: 'Удостоверение личности (паспорт / водительские права) для верификации через RealMe — оба партнёра' }
+  ]},
+  { step: 6, title: 'Подача заявки на инкорпорацию', items: [
+    { id: '6-1', text: 'Выбрано зарезервированное название' },
+    { id: '6-2', text: 'Внесены директора' },
+    { id: '6-3', text: 'Внесены акционеры и структура акций (50/50)' },
+    { id: '6-4', text: 'Указан зарегистрированный офис и адрес для корреспонденции' },
+    { id: '6-5', text: 'Прикреплён constitution (если применимо)' },
+    { id: '6-6', text: 'Оплачена пошлина', note: 'NZD 118,74 + GST' }
+  ]},
+  { step: 7, title: 'Подтверждение согласия (Form 3)', items: [
+    { id: '7-1', text: 'Партнёр 1 подтвердил согласие онлайн' },
+    { id: '7-2', text: 'Партнёр 2 подтвердил согласие онлайн' }
+  ], note: 'Подтвердить нужно в течение 20 рабочих дней с момента подачи заявки, иначе регистрация будет аннулирована.' },
+  { step: 8, title: 'Получение сертификата', items: [
+    { id: '8-1', text: 'Получен Certificate of Incorporation на email' },
+    { id: '8-2', text: 'Получен NZBN (New Zealand Business Number)' }
+  ]},
+  { step: 9, title: 'Налоговая регистрация', items: [
+    { id: '9-1', text: 'Получен IRD-номер компании' },
+    { id: '9-2', text: 'Принято решение по GST-регистрации', note: 'обязательна при ожидаемом обороте от NZD 60 000/год' },
+    { id: '9-3', text: 'Регистрация как работодателя в IRD + ACC', note: 'если планируется нанимать сотрудников' }
+  ]},
+  { step: 10, title: 'Банковский счёт', items: [
+    { id: '10-1', text: 'Открыт корпоративный счёт', note: 'нужны: сертификат об инкорпорации, IRD-номер, удостоверения личности обоих партнёров' }
+  ]},
+  { step: 11, title: "Shareholders' agreement", items: [
+    { id: '11-1', text: 'Составлено акционерное соглашение (отдельно от Companies Office)' },
+    { id: '11-2', text: 'Прописан механизм разрешения дедлока' },
+    { id: '11-3', text: 'Прописаны условия выхода партнёра / выкупа доли' },
+    { id: '11-4', text: 'Распределены роли и обязанности партнёров' }
+  ], note: 'Не подаётся в реестр, но при равных долях 50/50 это один из самых важных документов — рекомендуется оформить с юристом.' },
+  { step: 12, title: 'Текущие обязательства после регистрации', items: [
+    { id: '12-1', text: 'Отмечен месяц подачи annual return', note: 'сообщит Companies Office' },
+    { id: '12-2', text: 'Настроено хранение записей', note: 'минимум 7 лет' },
+    { id: '12-3', text: 'Есть понимание: об изменении данных нужно уведомлять Companies Office в течение 20 рабочих дней' }
+  ]}
+];
 
 // Правила, из-за которых конкретная дата (YYYY-MM-DD) считается нерабочей —
 // либо повторяющийся день недели, либо диапазон дат (отпуск/праздник)
@@ -248,6 +313,10 @@ async function loadAll() {
       (orderPartnersByOrder[op.order_id] ||= []).push(op);
     });
   }
+
+  const { data: ltdRow, error: e7 } = await sb.from('ltd_checklist').select('*').eq('id', 1).maybeSingle();
+  if (e7) { console.error(e7); } // таблица могла быть ещё не создана — тогда просто не показываем чек-лист
+  else ltdChecklist = (ltdRow && ltdRow.payload) || {};
 }
 
 function subscribeRealtime() {
@@ -281,13 +350,18 @@ function subscribeRealtime() {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
+  sb.channel('public:ltd_checklist')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ltd_checklist' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
 }
 
 // ------------------------------------------------------------
 // Переключение вкладок-видов
 // ------------------------------------------------------------
-const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners') };
-const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners') };
+const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners'), ltd: document.getElementById('tab-ltd') };
+const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners'), ltd: document.getElementById('view-ltd') };
 Object.keys(viewTabs).forEach(key => {
   viewTabs[key].onclick = () => {
     activeView = key;
@@ -302,7 +376,8 @@ function renderCurrentView() {
   else if (activeView === 'upcoming') renderUpcoming();
   else if (activeView === 'all') renderAllOrders();
   else if (activeView === 'finance') renderFinance();
-  else renderPartners();
+  else if (activeView === 'partners') renderPartners();
+  else renderLtdChecklist();
 }
 
 // ------------------------------------------------------------
@@ -1350,6 +1425,117 @@ document.getElementById('f-delete').onclick = async () => {
   renderCurrentView();
   closeModal();
 };
+
+// ------------------------------------------------------------
+// Чек-лист регистрации LTD (общий документ, для двух партнёров)
+// ------------------------------------------------------------
+function ltdTotalCount() {
+  return LTD_CHECKLIST_SECTIONS.reduce((sum, s) => sum + s.items.length, 0);
+}
+
+function ltdDoneCount() {
+  const items = ltdChecklist.items || {};
+  return LTD_CHECKLIST_SECTIONS.reduce((sum, s) => sum + s.items.filter(it => items[it.id]).length, 0);
+}
+
+async function saveLtdChecklist(patch) {
+  ltdChecklist = { ...ltdChecklist, ...patch };
+  const { error } = await sb.from('ltd_checklist').upsert({ id: 1, payload: ltdChecklist, updated_at: new Date().toISOString() });
+  if (error) { console.error(error); alert('Ошибка сохранения чек-листа: ' + error.message); }
+}
+
+async function toggleLtdItem(itemId) {
+  const items = { ...(ltdChecklist.items || {}) };
+  items[itemId] = !items[itemId];
+  await saveLtdChecklist({ items });
+  renderLtdChecklist();
+}
+
+function renderLtdChecklist() {
+  const box = document.getElementById('view-ltd');
+  const total = ltdTotalCount();
+  const done = ltdDoneCount();
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const circumference = 138.2;
+  const offset = circumference - (pct / 100) * circumference;
+
+  box.innerHTML = `
+    <div class="ltd-checklist">
+      <div class="ltd-header">
+        <div>
+          <div class="ltd-title">Регистрация LTD в Новой Зеландии</div>
+          <div class="ltd-subtitle">Общий чек-лист · два партнёра, доли 50/50</div>
+        </div>
+      </div>
+
+      <div class="ltd-progress-card">
+        <div class="ltd-progress-ring">
+          <svg width="56" height="56">
+            <circle class="bg" cx="28" cy="28" r="22"></circle>
+            <circle class="fg" cx="28" cy="28" r="22" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"></circle>
+          </svg>
+          <div class="pct">${pct}%</div>
+        </div>
+        <div class="ltd-progress-text">Выполнено <b>${done}</b> из <b>${total}</b> пунктов.<br/>Отметки видит любой сотрудник, вошедший в приложение.</div>
+      </div>
+
+      <div class="ltd-names">
+        <input type="text" id="ltd-partner1-name" placeholder="Имя партнёра 1" value="${escapeHtml(ltdChecklist.partner1_name || '')}" />
+        <input type="text" id="ltd-partner2-name" placeholder="Имя партнёра 2" value="${escapeHtml(ltdChecklist.partner2_name || '')}" />
+      </div>
+      <div class="ltd-names">
+        <input type="text" id="ltd-company-name" placeholder="Планируемое название компании" value="${escapeHtml(ltdChecklist.company_name || '')}" />
+        <input type="date" id="ltd-start-date" value="${escapeHtml(ltdChecklist.start_date || '')}" />
+      </div>
+
+      <div id="ltd-sections"></div>
+
+      <p class="ltd-footer">Справочно — источник: New Zealand Companies Office. Не является юридической консультацией.</p>
+    </div>
+  `;
+
+  const sectionsBox = document.getElementById('ltd-sections');
+  const items = ltdChecklist.items || {};
+  LTD_CHECKLIST_SECTIONS.forEach(section => {
+    const sectionEl = document.createElement('div');
+    sectionEl.className = 'ltd-section';
+    const header = document.createElement('div');
+    header.className = 'ltd-section-header';
+    header.innerHTML = `<span class="ltd-step">Шаг ${section.step}.</span><span class="ltd-section-title">${escapeHtml(section.title)}</span>`;
+    sectionEl.appendChild(header);
+
+    const itemsEl = document.createElement('div');
+    itemsEl.className = 'ltd-items';
+    section.items.forEach(item => {
+      const checked = !!items[item.id];
+      const row = document.createElement('div');
+      row.className = 'ltd-item' + (checked ? ' done' : '');
+      row.onclick = () => toggleLtdItem(item.id);
+      row.innerHTML = `
+        <div class="ltd-checkbox${checked ? ' checked' : ''}"></div>
+        <div>
+          <span class="ltd-item-text">${escapeHtml(item.text)}</span>
+          ${item.note ? `<span class="ltd-item-note">${escapeHtml(item.note)}</span>` : ''}
+        </div>
+      `;
+      itemsEl.appendChild(row);
+    });
+    sectionEl.appendChild(itemsEl);
+
+    if (section.note) {
+      const noteBox = document.createElement('div');
+      noteBox.className = 'ltd-note-box';
+      noteBox.innerHTML = `<b>Важно:</b> ${escapeHtml(section.note)}`;
+      sectionEl.appendChild(noteBox);
+    }
+    sectionsBox.appendChild(sectionEl);
+  });
+
+  document.getElementById('ltd-partner1-name').onchange = (e) => saveLtdChecklist({ partner1_name: e.target.value });
+  document.getElementById('ltd-partner2-name').onchange = (e) => saveLtdChecklist({ partner2_name: e.target.value });
+  document.getElementById('ltd-company-name').onchange = (e) => saveLtdChecklist({ company_name: e.target.value });
+  document.getElementById('ltd-start-date').onchange = (e) => saveLtdChecklist({ start_date: e.target.value });
+}
 
 // ------------------------------------------------------------
 // Регистрация service worker (для установки на устройство)
