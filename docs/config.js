@@ -6,11 +6,11 @@
 // доступ к данным всё равно ограничен политиками RLS.
 // ============================================================
 window.FUNTRAIL_CONFIG = {
-  SUPABASE_URL: "https://iaxlpnsmyyjmupjaurlm.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlheGxwbnNteXlqbXVwamF1cmxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MjMwMDcsImV4cCI6MjEwMDQ5OTAwN30.-Na6u_q4hxS4ZlEhZ3nW0-NGXIBh7iKvdBm55U_E_cQ",
+  SUPABASE_URL: "https://ВАШ-ПРОЕКТ.supabase.co",
+  SUPABASE_ANON_KEY: "ВАШ-ANON-KEY",
 
   // Название компании — показывается в шапке приложения
-  COMPANY_NAME: "FunTrail",
+  COMPANY_NAME: "Funtrail",
 
   // За сколько дней до тура считать заказ "скоро" (для выделения в календаре)
   UPCOMING_DAYS_THRESHOLD: 3
