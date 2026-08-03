@@ -212,13 +212,12 @@ function daysBetween(a, b) {
 // ------------------------------------------------------------
 const authScreen = document.getElementById('auth-screen');
 const mainScreen = document.getElementById('main-screen');
-const tabSignin = document.getElementById('tab-signin');
-const tabSignup = document.getElementById('tab-signup');
-let authMode = 'signin';
 
-tabSignin.onclick = () => { authMode = 'signin'; tabSignin.classList.add('active'); tabSignup.classList.remove('active'); document.getElementById('auth-submit').textContent = 'Войти'; };
-tabSignup.onclick = () => { authMode = 'signup'; tabSignup.classList.add('active'); tabSignin.classList.remove('active'); document.getElementById('auth-submit').textContent = 'Зарегистрироваться'; };
-
+// Самостоятельная регистрация из приложения убрана намеренно (25.07.2026) —
+// доступ теперь только для уже существующих аккаунтов, заведённых вручную
+// через Supabase Dashboard → Authentication → Users. Это осознанное решение
+// по безопасности, не баг: если нужно добавить нового сотрудника — заводить
+// его там, а не через форму в приложении.
 document.getElementById('auth-submit').onclick = async () => {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
@@ -226,14 +225,8 @@ document.getElementById('auth-submit').onclick = async () => {
   msg.textContent = '';
   if (!email || !password) { msg.textContent = 'Заполните email и пароль'; return; }
 
-  if (authMode === 'signin') {
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) msg.textContent = error.message;
-  } else {
-    const { error } = await sb.auth.signUp({ email, password });
-    if (error) msg.textContent = error.message;
-    else msg.textContent = 'Готово! Проверьте почту для подтверждения (если требуется), затем войдите.';
-  }
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) msg.textContent = error.message;
 };
 
 document.getElementById('btn-logout').onclick = async () => {
@@ -369,6 +362,38 @@ Object.keys(viewTabs).forEach(key => {
     Object.keys(viewEls).forEach(k => viewEls[k].style.display = (k === key ? 'block' : 'none'));
     renderCurrentView();
   };
+});
+
+// ------------------------------------------------------------
+// Меню-кнопка вместо строки вкладок — только на маленьких экранах
+// (видимость переключается в style.css через media query). Переиспользует
+// клики по обычным вкладкам выше, чтобы логика переключения не дублировалась.
+// ------------------------------------------------------------
+const VIEW_LABELS_MOBILE = { calendar: 'Календарь', upcoming: 'Ближайшие', all: 'Все заказы', finance: 'Финансы', partners: 'Партнёры', ltd: 'LTD чек-лист' };
+const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+const mobileMenuLabel = document.getElementById('mobile-menu-label');
+const mobileMenuDropdown = document.getElementById('mobile-menu-dropdown');
+
+mobileMenuBtn.onclick = (e) => {
+  e.stopPropagation();
+  mobileMenuDropdown.style.display = (mobileMenuDropdown.style.display === 'none') ? 'block' : 'none';
+};
+
+mobileMenuDropdown.querySelectorAll('button[data-view]').forEach(btn => {
+  btn.onclick = () => {
+    const key = btn.dataset.view;
+    viewTabs[key].click(); // та же логика переключения, что и у обычных вкладок
+    mobileMenuLabel.textContent = VIEW_LABELS_MOBILE[key];
+    mobileMenuDropdown.querySelectorAll('button[data-view]').forEach(b => b.classList.toggle('active', b === btn));
+    mobileMenuDropdown.style.display = 'none';
+  };
+});
+
+// закрыть меню при клике вне его
+document.addEventListener('click', (e) => {
+  if (mobileMenuDropdown.style.display !== 'none' && !document.getElementById('view-tabs-mobile').contains(e.target)) {
+    mobileMenuDropdown.style.display = 'none';
+  }
 });
 
 function renderCurrentView() {

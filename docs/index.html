@@ -21,10 +21,6 @@
     <div class="auth-box">
       <h1>Funtrail</h1>
       <p class="sub">Календарь заказов и напоминания для команды</p>
-      <div class="auth-tabs">
-        <button id="tab-signin" class="active">Войти</button>
-        <button id="tab-signup">Регистрация</button>
-      </div>
       <label>Email</label>
       <input type="email" id="auth-email" placeholder="you@funtrail.co.nz" autocomplete="email" />
       <label>Пароль</label>
@@ -46,13 +42,29 @@
       </div>
     </header>
 
-    <div class="view-tabs">
+    <div class="view-tabs" id="view-tabs-desktop">
       <button id="tab-calendar" class="active">Календарь</button>
       <button id="tab-upcoming">Ближайшие</button>
       <button id="tab-all">Все заказы</button>
       <button id="tab-finance">Финансы</button>
       <button id="tab-partners">Партнёры</button>
       <button id="tab-ltd">LTD чек-лист</button>
+    </div>
+
+    <!-- Только для маленьких экранов: кнопка-меню вместо строки вкладок -->
+    <div class="view-tabs-mobile" id="view-tabs-mobile">
+      <button class="mobile-menu-btn" id="mobile-menu-btn">
+        <span>☰ <span id="mobile-menu-label">Календарь</span></span>
+        <span>▾</span>
+      </button>
+      <div class="mobile-menu-dropdown" id="mobile-menu-dropdown" style="display:none;">
+        <button data-view="calendar" class="active">Календарь</button>
+        <button data-view="upcoming">Ближайшие</button>
+        <button data-view="all">Все заказы</button>
+        <button data-view="finance">Финансы</button>
+        <button data-view="partners">Партнёры</button>
+        <button data-view="ltd">LTD чек-лист</button>
+      </div>
     </div>
 
     <main>
