@@ -78,10 +78,29 @@ header .brand { display: flex; align-items: center; gap: 10px; font-weight: 600;
 header .brand img { width: 28px; height: 28px; border-radius: 6px; }
 header .actions { display: flex; gap: 8px; }
 
-/* ---------- View tabs ---------- */
+/* ---------- View tabs (десктоп и широкие экраны) ---------- */
 .view-tabs { display: flex; gap: 8px; padding: 10px 18px 0; overflow-x: auto; }
 .view-tabs button { background: transparent; color: var(--text-dim); border-bottom: 2px solid transparent; border-radius: 0; white-space: nowrap; flex-shrink: 0; }
 .view-tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
+
+/* ---------- View tabs — меню (только маленькие экраны, см. media query ниже) ---------- */
+.view-tabs-mobile { display: none; }
+.mobile-menu-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; font-size: 15px; font-weight: 600;
+}
+.mobile-menu-dropdown {
+  position: absolute; left: 18px; right: 18px; z-index: 20; margin-top: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+}
+.mobile-menu-dropdown button {
+  display: block; width: 100%; text-align: left; background: transparent; color: var(--text-dim);
+  border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 12px 14px; font-size: 15px;
+}
+.mobile-menu-dropdown button:last-child { border-bottom: none; }
+.mobile-menu-dropdown button.active { color: var(--accent); font-weight: 600; background: var(--panel-2); }
 
 main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 0 auto; }
 
@@ -263,11 +282,11 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }
   .fin-cards { grid-template-columns: repeat(2, 1fr); }
-  /* На узких экранах вкладки переносятся на следующую строку, а не
-     скроллятся вбок и не "уезжают" за край экрана — все вкладки видны
-     сразу, без горизонтальной прокрутки. */
-  .view-tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 8px; padding: 8px 12px 0; }
-  .view-tabs button { font-size: 13px; padding: 6px 4px; }
+  /* На маленьких экранах вместо строки вкладок — кнопка "☰ Название ▾",
+     открывающая выпадающий список. Так ничего не обрезается по краю
+     экрана и не нужно тыкать пальцем в мелкие вкладки. */
+  .view-tabs { display: none; }
+  .view-tabs-mobile { display: block; position: relative; padding: 10px 18px 0; }
 }
 
 /* ------------------------------------------------------------

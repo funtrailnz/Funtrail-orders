@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="google" content="notranslate" />
 <title>Funtrail — Заказы туров</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#0f766e" />
@@ -10,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <link rel="stylesheet" href="style.css" />
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -38,6 +39,7 @@
       <div class="brand"><img src="icons/icon-192.png" alt="" /><span id="company-name">Funtrail</span></div>
       <div class="actions">
         <button class="secondary" id="btn-new-order">+ Заказ</button>
+        <button class="ghost" id="btn-refresh-app" title="Обновить до последней версии">🔄</button>
         <button class="ghost" id="btn-logout">Выйти</button>
       </div>
     </header>

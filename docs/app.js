@@ -233,6 +233,21 @@ document.getElementById('btn-logout').onclick = async () => {
   await sb.auth.signOut();
 };
 
+// Кнопка "🔄" — принудительно обновить версию приложения, не выходя и не
+// закрывая его вручную. Сервис-воркер и так работает "сеть в приоритете",
+// но уже открытая вкладка/установленное приложение продолжает работать со
+// старым app.js, загруженным в память при запуске — обычная перезагрузка
+// страницы решает это, т.к. заново запрашивает файлы по сети.
+document.getElementById('btn-refresh-app').onclick = async () => {
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) await reg.update();
+    }
+  } catch (e) { console.error(e); }
+  location.reload();
+};
+
 sb.auth.onAuthStateChange((event, session) => {
   if (session) {
     authScreen.style.display = 'none';
