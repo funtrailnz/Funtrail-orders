@@ -74,6 +74,9 @@ let orderExpenseItemsByOrder = {}; // order_id -> [{ id, category, amount, note 
 let editingOrderExpenseItems = []; // рабочая копия доп. статей расходов в открытой модалке заказа
 let editingPartnerId = null;
 let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
+let taskCategories = []; // справочник категорий задач (можно добавлять свой вариант)
+let businessTasks = []; // дневник задач бизнеса (не привязаны к конкретному туру)
+let editingTaskId = null;
 let currentMonth = new Date(); currentMonth.setDate(1);
 let financeMonth = new Date(); financeMonth.setDate(1);
 let financeMode = 'month'; // 'month' | 'custom' | 'all' — переключатель периода на вкладке "Финансы"
@@ -191,6 +194,17 @@ function orderExtraExpensesTotal(o) {
 function orderCostTotal(o) {
   return (Number(o.cost_transport) || 0) + (Number(o.cost_guide) || 0) + (Number(o.cost_tickets) || 0) +
     (Number(o.cost_accommodation) || 0) + (Number(o.cost_other) || 0) + orderExtraExpensesTotal(o);
+}
+
+// Задача считается срочной, если: (а) есть срок и до него осталось <= 2 дней
+// (по календарю, включая просроченные), и задача ещё не выполнена; либо
+// (б) срока нет, но выставлен приоритет "urgent" — на случай задач без даты,
+// которые всё равно горят
+const URGENT_DUE_DAYS = 2;
+function taskIsUrgent(t) {
+  if (t.status === 'done') return false;
+  if (t.due_date) return daysBetween(todayStr(), t.due_date) <= URGENT_DUE_DAYS;
+  return t.priority === 'urgent';
 }
 
 function monthRange(d) {
@@ -358,6 +372,14 @@ async function loadAll() {
       (orderExpenseItemsByOrder[item.order_id] ||= []).push(item);
     });
   }
+
+  const { data: taskCategoriesData, error: e11 } = await sb.from('task_categories').select('*').order('name', { ascending: true });
+  if (e11) { console.error(e11); } // таблица могла быть ещё не создана — тогда просто остаётся пустой список
+  else taskCategories = taskCategoriesData || [];
+
+  const { data: tasksData, error: e12 } = await sb.from('business_tasks').select('*').order('due_date', { ascending: true });
+  if (e12) { console.error(e12); } // таблица могла быть ещё не создана — тогда просто не показываем задачи
+  else businessTasks = tasksData || [];
 }
 
 function subscribeRealtime() {
@@ -411,13 +433,23 @@ function subscribeRealtime() {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
+  sb.channel('public:task_categories')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'task_categories' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:business_tasks')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'business_tasks' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
 }
 
 // ------------------------------------------------------------
 // Переключение вкладок-видов
 // ------------------------------------------------------------
-const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners'), ltd: document.getElementById('tab-ltd') };
-const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners'), ltd: document.getElementById('view-ltd') };
+const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners'), tasks: document.getElementById('tab-tasks'), ltd: document.getElementById('tab-ltd') };
+const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners'), tasks: document.getElementById('view-tasks'), ltd: document.getElementById('view-ltd') };
 Object.keys(viewTabs).forEach(key => {
   viewTabs[key].onclick = () => {
     activeView = key;
@@ -432,7 +464,7 @@ Object.keys(viewTabs).forEach(key => {
 // (видимость переключается в style.css через media query). Переиспользует
 // клики по обычным вкладкам выше, чтобы логика переключения не дублировалась.
 // ------------------------------------------------------------
-const VIEW_LABELS_MOBILE = { calendar: 'Календарь', upcoming: 'Ближайшие', all: 'Все заказы', finance: 'Финансы', partners: 'Партнёры', ltd: 'LTD чек-лист' };
+const VIEW_LABELS_MOBILE = { calendar: 'Календарь', upcoming: 'Ближайшие', all: 'Все заказы', finance: 'Финансы', partners: 'Партнёры', tasks: 'Задачи', ltd: 'LTD чек-лист' };
 const mobileMenuBtn = document.getElementById('mobile-menu-btn');
 const mobileMenuLabel = document.getElementById('mobile-menu-label');
 const mobileMenuDropdown = document.getElementById('mobile-menu-dropdown');
@@ -465,6 +497,7 @@ function renderCurrentView() {
   else if (activeView === 'all') renderAllOrders();
   else if (activeView === 'finance') renderFinance();
   else if (activeView === 'partners') renderPartners();
+  else if (activeView === 'tasks') renderTasks();
   else renderLtdChecklist();
 }
 
@@ -1206,6 +1239,200 @@ function exportFinanceCsv(periodOrders, periodExpenses, periodLabel, filenameSuf
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+// ------------------------------------------------------------
+// Задачи (дневник дел бизнеса) — общий список дел, не привязанный к
+// конкретному туру. Простой список, отсортированный по сроку; срочные
+// задачи (см. taskIsUrgent) выводятся отдельным блоком наверх.
+// ------------------------------------------------------------
+const TASK_STATUS_LABELS = { todo: 'Не начато', in_progress: 'В работе', done: 'Готово' };
+const TASK_PRIORITY_LABELS = { urgent: '🔥 Срочно', medium: 'Среднее', low: 'Не срочно' };
+
+function renderTasks() {
+  const box = document.getElementById('view-tasks');
+  box.innerHTML = `
+    <div class="expenses-toolbar">
+      <div class="section-title">Задачи</div>
+      <button id="btn-new-task">+ Задача</button>
+    </div>
+    <div id="tasks-urgent-box"></div>
+    <div class="section-title">Все задачи</div>
+    <div id="tasks-list-box"></div>
+    <div id="tasks-done-box"></div>
+  `;
+  document.getElementById('btn-new-task').onclick = () => openTaskModal(null);
+
+  const open = businessTasks.filter(t => t.status !== 'done');
+  const done = businessTasks.filter(t => t.status === 'done');
+  const urgent = open.filter(taskIsUrgent);
+
+  const urgentBox = document.getElementById('tasks-urgent-box');
+  if (urgent.length) {
+    urgentBox.innerHTML = `<div class="section-title">🔥 Срочные</div>`;
+    const list = document.createElement('div');
+    urgent
+      .sort((a, b) => (a.due_date || '9999-99-99').localeCompare(b.due_date || '9999-99-99'))
+      .forEach(t => list.appendChild(taskCard(t)));
+    urgentBox.appendChild(list);
+  } else {
+    urgentBox.innerHTML = '';
+  }
+
+  const listBox = document.getElementById('tasks-list-box');
+  const openSorted = [...open].sort((a, b) => (a.due_date || '9999-99-99').localeCompare(b.due_date || '9999-99-99'));
+  if (!openSorted.length) {
+    listBox.innerHTML = '<div class="empty-hint">Активных задач нет</div>';
+  } else {
+    listBox.innerHTML = '';
+    openSorted.forEach(t => listBox.appendChild(taskCard(t)));
+  }
+
+  const doneBox = document.getElementById('tasks-done-box');
+  if (done.length) {
+    doneBox.innerHTML = `<div class="section-title">Выполнено (${done.length})</div>`;
+    const list = document.createElement('div');
+    [...done].sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || '')).forEach(t => list.appendChild(taskCard(t)));
+    doneBox.appendChild(list);
+  } else {
+    doneBox.innerHTML = '';
+  }
+}
+
+function taskCard(t) {
+  const card = document.createElement('div');
+  card.className = 'order-card' + (taskIsUrgent(t) ? ' task-urgent' : '');
+  const dueLine = t.due_date
+    ? `📅 ${fmtDate(t.due_date)}`
+    : `${TASK_PRIORITY_LABELS[t.priority] || t.priority}`;
+  card.innerHTML = `
+    <div class="row1">
+      <div class="title">${escapeHtml(t.title)}</div>
+      <div class="badge status-${t.status}">${TASK_STATUS_LABELS[t.status] || t.status}</div>
+    </div>
+    <div class="meta">
+      ${dueLine}${t.category ? ' · ' + escapeHtml(t.category) : ''}
+    </div>
+    ${t.comment ? `<div class="meta">${escapeHtml(t.comment)}</div>` : ''}
+  `;
+  card.onclick = () => openTaskModal(t.id);
+  return card;
+}
+
+const taskModal = document.getElementById('task-modal');
+const taskCategorySelect = document.getElementById('tk-category');
+const taskCategoryCustomInput = document.getElementById('tk-category-new');
+const taskDueDateInput = document.getElementById('tk-due-date');
+const taskPriorityWrap = document.getElementById('tk-priority-wrap');
+
+function populateTaskCategorySelect() {
+  const current = taskCategorySelect.value;
+  const names = [...taskCategories].map(c => c.name).sort((a, b) => a.localeCompare(b, 'ru'));
+  taskCategorySelect.innerHTML = '<option value="">— без категории —</option>' +
+    names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('') +
+    '<option value="__custom__">Свой вариант…</option>';
+  taskCategorySelect.value = current;
+}
+
+taskCategorySelect.onchange = () => {
+  const isCustom = taskCategorySelect.value === '__custom__';
+  taskCategoryCustomInput.style.display = isCustom ? '' : 'none';
+  if (isCustom) taskCategoryCustomInput.focus();
+};
+
+// Приоритет имеет смысл только когда срок не указан — если срок есть,
+// срочность считается по дате (см. taskIsUrgent), поле приоритета прячем
+function updateTaskPriorityVisibility() {
+  taskPriorityWrap.style.display = taskDueDateInput.value ? 'none' : '';
+}
+taskDueDateInput.addEventListener('input', updateTaskPriorityVisibility);
+
+function openTaskModal(taskId) {
+  editingTaskId = taskId;
+  const t = taskId ? businessTasks.find(x => x.id === taskId) : null;
+  document.getElementById('task-modal-title').textContent = t ? 'Редактировать задачу' : 'Новая задача';
+  document.getElementById('tk-delete').style.display = t ? 'inline-block' : 'none';
+
+  document.getElementById('tk-title').value = t?.title || '';
+  populateTaskCategorySelect();
+  taskCategorySelect.value = t?.category || '';
+  if (t?.category && taskCategorySelect.value !== t.category) {
+    // категория есть, но её больше нет в справочнике (переименована/удалена) —
+    // показываем как "свой вариант", чтобы значение не потерялось
+    taskCategorySelect.value = '__custom__';
+    taskCategoryCustomInput.value = t.category;
+    taskCategoryCustomInput.style.display = '';
+  } else {
+    taskCategoryCustomInput.value = '';
+    taskCategoryCustomInput.style.display = 'none';
+  }
+  taskDueDateInput.value = t?.due_date || '';
+  document.getElementById('tk-priority').value = t?.priority || 'medium';
+  document.getElementById('tk-status').value = t?.status || 'todo';
+  document.getElementById('tk-comment').value = t?.comment || '';
+  updateTaskPriorityVisibility();
+
+  taskModal.style.display = 'flex';
+}
+
+function closeTaskModal() {
+  taskModal.style.display = 'none';
+  editingTaskId = null;
+}
+
+document.getElementById('tk-cancel').onclick = () => closeTaskModal();
+
+document.getElementById('tk-save').onclick = async () => {
+  const title = document.getElementById('tk-title').value.trim();
+  if (!title) { alert('Укажите название задачи'); return; }
+
+  let category = taskCategorySelect.value === '__custom__' ? taskCategoryCustomInput.value.trim() : taskCategorySelect.value;
+  category = category || null;
+
+  const status = document.getElementById('tk-status').value;
+  const wasDone = editingTaskId ? (businessTasks.find(x => x.id === editingTaskId)?.status === 'done') : false;
+
+  const payload = {
+    title,
+    category,
+    due_date: taskDueDateInput.value || null,
+    priority: document.getElementById('tk-priority').value,
+    status,
+    comment: document.getElementById('tk-comment').value || null,
+    completed_at: status === 'done' ? (wasDone ? undefined : new Date().toISOString()) : null
+  };
+  if (payload.completed_at === undefined) delete payload.completed_at; // не трогаем уже проставленную дату завершения
+
+  // если введена новая своя категория — сохраняем в справочник для повторного использования
+  if (category) {
+    const alreadyKnown = taskCategories.some(c => c.name.toLowerCase() === category.toLowerCase());
+    if (!alreadyKnown) {
+      const { error: cErr } = await sb.from('task_categories').upsert({ name: category }, { onConflict: 'name', ignoreDuplicates: true });
+      if (cErr) console.error(cErr); // не критично для сохранения самой задачи
+    }
+  }
+
+  if (editingTaskId) {
+    const { error } = await sb.from('business_tasks').update(payload).eq('id', editingTaskId);
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  } else {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('business_tasks').insert({ ...payload, created_by: user?.id });
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  }
+
+  await loadAll();
+  renderCurrentView();
+  closeTaskModal();
+};
+
+document.getElementById('tk-delete').onclick = async () => {
+  if (!editingTaskId) return;
+  if (!confirm('Удалить эту задачу? Действие необратимо.')) return;
+  await sb.from('business_tasks').delete().eq('id', editingTaskId);
+  await loadAll();
+  renderCurrentView();
+  closeTaskModal();
+};
 
 // ------------------------------------------------------------
 // Карточка заказа

@@ -50,6 +50,7 @@
       <button id="tab-all">Все заказы</button>
       <button id="tab-finance">Финансы</button>
       <button id="tab-partners">Партнёры</button>
+      <button id="tab-tasks">Задачи</button>
       <button id="tab-ltd">LTD чек-лист</button>
     </div>
 
@@ -65,6 +66,7 @@
         <button data-view="all">Все заказы</button>
         <button data-view="finance">Финансы</button>
         <button data-view="partners">Партнёры</button>
+        <button data-view="tasks">Задачи</button>
         <button data-view="ltd">LTD чек-лист</button>
       </div>
     </div>
@@ -95,6 +97,9 @@
 
       <!-- Вид: партнёры -->
       <div id="view-partners" style="display:none;"></div>
+
+      <!-- Вид: задачи (дневник дел бизнеса) -->
+      <div id="view-tasks" style="display:none;"></div>
 
       <!-- Вид: чек-лист регистрации LTD -->
       <div id="view-ltd" style="display:none;"></div>
@@ -435,6 +440,62 @@
         <div class="right">
           <button class="secondary" id="pt-cancel">Отмена</button>
           <button id="pt-save">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Модалка задачи (дневник дел бизнеса) ============ -->
+  <div id="task-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2 id="task-modal-title">Новая задача</h2>
+      <label>Название</label>
+      <input type="text" id="tk-title" placeholder="напр. Продлить страховку минивэна" />
+
+      <div class="grid2">
+        <div>
+          <label>Категория</label>
+          <select id="tk-category">
+            <option value="">— без категории —</option>
+            <option value="__custom__">Свой вариант…</option>
+          </select>
+          <input type="text" id="tk-category-new" placeholder="Введите свою категорию" style="display:none; margin-top:6px;" />
+        </div>
+        <div>
+          <label>Срок выполнения</label>
+          <input type="date" id="tk-due-date" />
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div id="tk-priority-wrap">
+          <label>Приоритет (используется, если не задан срок)</label>
+          <select id="tk-priority">
+            <option value="urgent">🔥 Срочно</option>
+            <option value="medium" selected>Среднее</option>
+            <option value="low">Не срочно</option>
+          </select>
+        </div>
+        <div>
+          <label>Статус</label>
+          <select id="tk-status">
+            <option value="todo">Не начато</option>
+            <option value="in_progress">В работе</option>
+            <option value="done">Готово</option>
+          </select>
+        </div>
+      </div>
+
+      <label>Комментарий</label>
+      <textarea id="tk-comment" rows="3" placeholder="Детали, ссылки, контакты..."></textarea>
+
+      <div class="modal-footer">
+        <div>
+          <button class="danger" id="tk-delete" style="display:none;">Удалить</button>
+        </div>
+        <div class="right">
+          <button class="secondary" id="tk-cancel">Отмена</button>
+          <button id="tk-save">Сохранить</button>
         </div>
       </div>
     </div>

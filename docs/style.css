@@ -299,6 +299,12 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .orderexpenses-add input[type=number] { flex: 0 1 110px; }
 .orderexpenses-add button { flex: 0 0 auto; }
 
+/* ---------- Задачи (дневник дел бизнеса) ---------- */
+.status-todo { background: #64748b; }
+.status-in_progress { background: #3b82f6; }
+.status-done { background: #22c55e; }
+.order-card.task-urgent { border-left-color: var(--danger); }
+
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }
