@@ -70,6 +70,8 @@ let orderPartnersByOrder = {}; // order_id -> [{ id, partner_id, amount, note }]
 let vehicles = []; // справочник транспорта для формы заказа (можно добавлять свой вариант)
 let orderVehiclesByOrder = {}; // order_id -> [{ id, vehicle_name, note }] — на один тур может быть несколько машин
 let editingOrderVehicles = []; // рабочая копия списка транспорта в открытой модалке заказа
+let orderExpenseItemsByOrder = {}; // order_id -> [{ id, category, amount, note }] — доп. статьи расходов по туру
+let editingOrderExpenseItems = []; // рабочая копия доп. статей расходов в открытой модалке заказа
 let editingPartnerId = null;
 let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
 let currentMonth = new Date(); currentMonth.setDate(1);
@@ -179,10 +181,16 @@ function blockedRuleLabel(b) {
   return b.note ? `${base} (${b.note})` : base;
 }
 
-// Сумма всех расходов по конкретному туру (для расчёта маржи)
+// Сумма доп. статей расходов по туру (гибкий список — своя категория + сумма)
+function orderExtraExpensesTotal(o) {
+  return (orderExpenseItemsByOrder[o.id] || []).reduce((s, item) => s + (Number(item.amount) || 0), 0);
+}
+
+// Сумма всех расходов по конкретному туру (для расчёта маржи) — 5 фиксированных
+// полей + гибкие доп. статьи расходов (order_expense_items)
 function orderCostTotal(o) {
   return (Number(o.cost_transport) || 0) + (Number(o.cost_guide) || 0) + (Number(o.cost_tickets) || 0) +
-    (Number(o.cost_accommodation) || 0) + (Number(o.cost_other) || 0);
+    (Number(o.cost_accommodation) || 0) + (Number(o.cost_other) || 0) + orderExtraExpensesTotal(o);
 }
 
 function monthRange(d) {
@@ -341,6 +349,15 @@ async function loadAll() {
       (orderVehiclesByOrder[ov.order_id] ||= []).push(ov);
     });
   }
+
+  const { data: expenseItems, error: e10 } = await sb.from('order_expense_items').select('*').order('created_at', { ascending: true });
+  if (e10) { console.error(e10); } // таблица могла быть ещё не создана — тогда просто не показываем доп. расходы
+  else {
+    orderExpenseItemsByOrder = {};
+    (expenseItems || []).forEach(item => {
+      (orderExpenseItemsByOrder[item.order_id] ||= []).push(item);
+    });
+  }
 }
 
 function subscribeRealtime() {
@@ -386,6 +403,11 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel('public:order_vehicles')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'order_vehicles' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:order_expense_items')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'order_expense_items' }, async () => {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
@@ -1155,14 +1177,15 @@ function exportFinanceCsv(periodOrders, periodExpenses, periodLabel, filenameSuf
   rows.push([`Funtrail — финансовый отчёт (${periodLabel})`]);
   rows.push([]);
   rows.push(['ЗАКАЗЫ']);
-  rows.push(['Дата тура', 'Клиент', 'Маршрут', 'Статус', 'Стоимость', 'Валюта', 'Аванс', 'Транспорт', 'Гид', 'Билеты', 'Проживание', 'Прочее', 'Расходы итого', 'Прибыль']);
+  rows.push(['Дата тура', 'Клиент', 'Маршрут', 'Статус', 'Стоимость', 'Валюта', 'Аванс', 'Транспорт', 'Гид', 'Билеты', 'Проживание', 'Прочее', 'Доп. расходы', 'Расходы итого', 'Прибыль']);
   periodOrders.forEach(o => {
+    const extra = orderExtraExpensesTotal(o);
     const cost = orderCostTotal(o);
     rows.push([
       o.tour_date, o.customer_name || '', TOUR_LABELS[o.tour_type] || o.tour_type, STATUS_LABELS[o.status] || o.status,
       o.total_price ?? '', o.currency || 'NZD', o.deposit_amount ?? '',
       o.cost_transport ?? '', o.cost_guide ?? '', o.cost_tickets ?? '', o.cost_accommodation ?? '', o.cost_other ?? '',
-      cost, (Number(o.total_price) || 0) - cost
+      extra || '', cost, (Number(o.total_price) || 0) - cost
     ]);
   });
   rows.push([]);
@@ -1236,7 +1259,7 @@ const modal = document.getElementById('order-modal');
 document.getElementById('btn-new-order').onclick = () => openOrderModal(null);
 document.getElementById('f-cancel').onclick = () => closeModal();
 
-function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; editingOrderVehicles = []; }
+function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; editingOrderVehicles = []; editingOrderExpenseItems = []; }
 
 // Заполняет выпадающий список для добавления транспорта в форме заказа:
 // сохранённые в справочнике vehicles варианты + "Свой вариант…" в конце
@@ -1317,6 +1340,13 @@ function openOrderModal(orderId) {
   document.getElementById('f-vehicle-new').style.display = 'none';
   document.getElementById('f-vehicle-note').value = '';
 
+  editingOrderExpenseItems = o ? (orderExpenseItemsByOrder[o.id] || []).map(x => ({ ...x })) : [];
+  renderOrderExpenseItemsEditor();
+  document.getElementById('f-expense-category').value = '';
+  document.getElementById('f-expense-amount').value = '';
+  document.getElementById('f-expense-note').value = '';
+  updateProfitDisplay(); // пересчитать с учётом доп. статей расходов, загруженных выше
+
   updateTourDateWarning();
   modal.style.display = 'flex';
 }
@@ -1340,8 +1370,12 @@ document.getElementById('f-tour-date').addEventListener('input', updateTourDateW
 function updateProfitDisplay() {
   const total = parseFloat(document.getElementById('f-total-price').value) || 0;
   const costIds = ['f-cost-transport', 'f-cost-guide', 'f-cost-tickets', 'f-cost-accommodation', 'f-cost-other'];
-  const cost = costIds.reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
-  const profit = total - cost;
+  const fixedCost = costIds.reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  // + доп. статьи расходов, добавленные в списке ниже (ещё не сохранённые,
+  // берём из рабочей копии editingOrderExpenseItems, чтобы подсказка сразу
+  // учитывала то, что видно в форме)
+  const extraCost = editingOrderExpenseItems.reduce((s, item) => s + (Number(item.amount) || 0), 0);
+  const profit = total - fixedCost - extraCost;
   document.getElementById('f-profit-display').value = fmtMoney(profit) + ' ' + (document.getElementById('f-currency').value || 'NZD');
 }
 ['f-total-price', 'f-cost-transport', 'f-cost-guide', 'f-cost-tickets', 'f-cost-accommodation', 'f-cost-other', 'f-currency'].forEach(id => {
@@ -1479,6 +1513,51 @@ document.getElementById('f-vehicle-add-btn').onclick = () => {
   renderOrderVehiclesEditor();
 };
 
+// ------------------------------------------------------------
+// Доп. статьи расходов по туру (в форме заказа) — своя категория и сумма,
+// сколько угодно строк, автоматически суммируются в "Прибыль по туру" и
+// во всех финансовых отчётах (см. orderCostTotal/orderExtraExpensesTotal)
+// ------------------------------------------------------------
+function renderOrderExpenseItemsEditor() {
+  const box = document.getElementById('f-expense-items');
+  if (!editingOrderExpenseItems.length) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Доп. расходы не добавлены</div>';
+    return;
+  }
+  box.innerHTML = '';
+  editingOrderExpenseItems.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'orderexpense-row';
+    row.innerHTML = `
+      <span class="name">${escapeHtml(item.category)}</span>
+      <span class="amt">${fmtMoney(item.amount)} NZD</span>
+      <span class="note">${escapeHtml(item.note || '')}</span>
+      <button class="ghost oe-remove" data-idx="${idx}">✕</button>
+    `;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('.oe-remove').forEach(btn => btn.onclick = (e) => {
+    const idx = +e.target.dataset.idx;
+    editingOrderExpenseItems.splice(idx, 1);
+    renderOrderExpenseItemsEditor();
+    updateProfitDisplay();
+  });
+}
+
+document.getElementById('f-expense-add-btn').onclick = () => {
+  const category = document.getElementById('f-expense-category').value.trim();
+  const amountVal = document.getElementById('f-expense-amount').value;
+  if (!category) { alert('Введите название статьи расходов'); return; }
+  if (!amountVal) { alert('Введите сумму'); return; }
+  const note = document.getElementById('f-expense-note').value.trim() || null;
+  editingOrderExpenseItems.push({ category, amount: parseFloat(amountVal) || 0, note, _new: true });
+  document.getElementById('f-expense-category').value = '';
+  document.getElementById('f-expense-amount').value = '';
+  document.getElementById('f-expense-note').value = '';
+  renderOrderExpenseItemsEditor();
+  updateProfitDisplay();
+};
+
 document.getElementById('f-partner-add-btn').onclick = () => {
   const partnerId = document.getElementById('f-partner-select').value;
   if (!partnerId) { alert('Выберите партнёра'); return; }
@@ -1558,6 +1637,19 @@ document.getElementById('f-save').onclick = async () => {
       await sb.from('order_vehicles').update({ vehicle_name: item.vehicle_name, note: item.note }).eq('id', item.id);
     } else {
       await sb.from('order_vehicles').insert({ order_id: orderId, vehicle_name: item.vehicle_name, note: item.note });
+    }
+  }
+
+  // синхронизация доп. статей расходов по туру
+  const originalExpenseItems = orderExpenseItemsByOrder[orderId] || [];
+  const keepExpenseItemIds = editingOrderExpenseItems.filter(x => x.id).map(x => x.id);
+  const removedExpenseItems = originalExpenseItems.filter(x => !keepExpenseItemIds.includes(x.id));
+  for (const r of removedExpenseItems) await sb.from('order_expense_items').delete().eq('id', r.id);
+  for (const item of editingOrderExpenseItems) {
+    if (item.id) {
+      await sb.from('order_expense_items').update({ category: item.category, amount: item.amount, note: item.note }).eq('id', item.id);
+    } else {
+      await sb.from('order_expense_items').insert({ order_id: orderId, category: item.category, amount: item.amount, note: item.note });
     }
   }
 
