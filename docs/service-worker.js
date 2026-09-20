@@ -9,7 +9,7 @@
 // как запасной вариант, если сети нет (офлайн). Так изменения,
 // закоммиченные на GitHub, подхватываются сразу при следующем
 // открытии приложения, без ручной очистки кеша.
-const CACHE_NAME = 'funtrail-shell-v11';
+const CACHE_NAME = 'funtrail-shell-v12';
 const SHELL_FILES = [
   './',
   './index.html',

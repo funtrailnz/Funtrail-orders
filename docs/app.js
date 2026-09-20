@@ -2752,6 +2752,131 @@ function renderLtdChecklist() {
 }
 
 // ------------------------------------------------------------
+// Полный бэкап базы данных (кнопка "💾" в шапке)
+// ------------------------------------------------------------
+// Задача бэкапа — не "отчёт для чтения человеком" (для этого уже есть
+// отдельные XLSX/CSV экспорты), а возможность полностью восстановить
+// данные, если что-то сломается в коде или в самой базе. Поэтому формат —
+// ZIP-архив с сырыми JSON-дампами КАЖДОЙ таблицы (по одному файлу на
+// таблицу, в исходном виде "как в базе", без преобразований) плюс реальные
+// файлы вложений задач из Supabase Storage — а не просто список их имён.
+//
+// Список таблиц продублирован здесь вручную (а не переиспользован из
+// loadAll()), потому что loadAll() местами фильтрует/сортирует/группирует
+// данные под нужды экрана — а бэкапу нужен именно полный, ничем не
+// урезанный дамп "select * from <table>" по каждой таблице.
+const BACKUP_TABLES = [
+  'orders', 'checklist_items', 'business_expenses', 'blocked_days',
+  'partners', 'order_partners', 'order_vehicles', 'order_expense_items',
+  'ltd_checklist', 'vehicles', 'task_categories', 'business_tasks',
+  'task_comments', 'task_attachments', 'vehicle_trips'
+];
+
+async function downloadFullBackup() {
+  const btn = document.getElementById('btn-backup');
+  const originalContent = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const zip = new JSZip();
+    const tableErrors = [];
+    const rowCounts = {};
+    let taskAttachmentRows = [];
+
+    for (const table of BACKUP_TABLES) {
+      const { data, error } = await sb.from(table).select('*');
+      if (error) {
+        // Как и в loadAll(): ошибка на одной таблице (например, ещё не
+        // применённая миграция) не должна обрывать бэкап остальных —
+        // просто фиксируем таблицу как "не удалось" и продолжаем.
+        tableErrors.push({ table, message: error.message });
+        continue;
+      }
+      const rows = data || [];
+      rowCounts[table] = rows.length;
+      zip.file(`tables/${table}.json`, JSON.stringify(rows, null, 2));
+      if (table === 'task_attachments') taskAttachmentRows = rows;
+    }
+
+    // Реальные файлы вложений, а не только записи о них в task_attachments
+    const fileErrors = [];
+    let filesIncluded = 0;
+    for (const item of taskAttachmentRows) {
+      if (!item.storage_path) continue;
+      const { data: blob, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).download(item.storage_path);
+      if (error || !blob) {
+        fileErrors.push({ path: item.storage_path, message: error ? error.message : 'пустой ответ' });
+        continue;
+      }
+      zip.file(`files/${TASK_ATTACHMENTS_BUCKET}/${item.storage_path}`, blob);
+      filesIncluded++;
+    }
+
+    const { data: { user } } = await sb.auth.getUser();
+    const meta = {
+      app: 'funtrail-orders-app',
+      generated_at: new Date().toISOString(),
+      generated_by: user?.email || user?.id || null,
+      schema_migration: 'migration_011_task_comments_and_subtasks',
+      tables: BACKUP_TABLES,
+      row_counts: rowCounts,
+      attachments_bucket: TASK_ATTACHMENTS_BUCKET,
+      attachments_included: filesIncluded,
+      attachments_expected: taskAttachmentRows.length,
+      table_errors: tableErrors,
+      file_errors: fileErrors
+    };
+    zip.file('backup_meta.json', JSON.stringify(meta, null, 2));
+    zip.file('ПРОЧТИ_МЕНЯ.txt',
+      'Полный бэкап базы данных Funtrail Orders App\n' +
+      '=============================================\n\n' +
+      `Создан: ${new Date().toLocaleString('ru-RU')}\n\n` +
+      'Структура архива:\n' +
+      '  backup_meta.json        — сводка: какие таблицы вошли, сколько строк, что не удалось\n' +
+      '  tables/<таблица>.json   — по одному файлу на каждую таблицу базы данных Supabase,\n' +
+      '                            строки в исходном виде "как в базе" (select * from ...)\n' +
+      `  files/${TASK_ATTACHMENTS_BUCKET}/...   — реальные файлы вложений задач (не только их названия),\n` +
+      '                            пути совпадают со значением storage_path в tables/task_attachments.json\n\n' +
+      'Восстановление в случае проблем с кодом или базой данных:\n' +
+      '  1. Пересоздать структуру таблиц в Supabase по файлам миграций проекта\n' +
+      '     (supabase/migration_001...*.sql и далее по порядку).\n' +
+      '  2. Загрузить содержимое каждого tables/<таблица>.json обратно в соответствующую\n' +
+      '     таблицу (например через insert построчно или импорт JSON).\n' +
+      `  3. Загрузить файлы из files/${TASK_ATTACHMENTS_BUCKET}/ обратно в Supabase Storage,\n` +
+      '     бакет "' + TASK_ATTACHMENTS_BUCKET + '", сохраняя те же пути (storage_path) —\n' +
+      '     тогда ссылки в task_attachments снова будут рабочими.\n\n' +
+      'Если что-то из этого непонятно — покажите этот файл и backup_meta.json Claude,\n' +
+      'который вёл разработку приложения, он сможет провести восстановление по шагам.\n'
+    );
+
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    const filename = `funtrail-backup-${stamp}.zip`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    const problems = [];
+    if (tableErrors.length) problems.push(`не удалось выгрузить таблицы: ${tableErrors.map(t => t.table).join(', ')}`);
+    if (fileErrors.length) problems.push(`не удалось скачать файлов: ${fileErrors.length} из ${taskAttachmentRows.length}`);
+    if (problems.length) {
+      alert('Бэкап скачан, но с замечаниями:\n' + problems.join('\n') + '\n\nПодробности — в backup_meta.json внутри архива.');
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Не удалось создать бэкап: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalContent;
+  }
+}
+
+document.getElementById('btn-backup').onclick = () => downloadFullBackup();
+
+// ------------------------------------------------------------
 // Регистрация service worker (для установки на устройство)
 // ------------------------------------------------------------
 if ('serviceWorker' in navigator) {
