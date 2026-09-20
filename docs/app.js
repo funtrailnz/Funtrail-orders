@@ -67,6 +67,7 @@ let businessExpenses = []; // общебизнес расходы (не прив
 let blockedDays = []; // нерабочие дни: { kind: 'weekday'|'range', weekday, start_date, end_date, note }
 let partners = []; // партнёры: транспорт, гиды, поставщики услуг
 let orderPartnersByOrder = {}; // order_id -> [{ id, partner_id, amount, note }]
+let vehicles = []; // справочник транспорта для формы заказа (можно добавлять свой вариант)
 let editingPartnerId = null;
 let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
 let currentMonth = new Date(); currentMonth.setDate(1);
@@ -325,6 +326,10 @@ async function loadAll() {
   const { data: ltdRow, error: e7 } = await sb.from('ltd_checklist').select('*').eq('id', 1).maybeSingle();
   if (e7) { console.error(e7); } // таблица могла быть ещё не создана — тогда просто не показываем чек-лист
   else ltdChecklist = (ltdRow && ltdRow.payload) || {};
+
+  const { data: vehiclesData, error: e8 } = await sb.from('vehicles').select('*').order('name', { ascending: true });
+  if (e8) { console.error(e8); } // таблица могла быть ещё не создана — тогда просто остаётся пустой список
+  else vehicles = vehiclesData || [];
 }
 
 function subscribeRealtime() {
@@ -360,6 +365,11 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel('public:ltd_checklist')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'ltd_checklist' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:vehicles')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, async () => {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
@@ -1210,6 +1220,18 @@ document.getElementById('f-cancel').onclick = () => closeModal();
 
 function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; }
 
+// Заполняет выпадающий список транспорта в форме заказа: сначала —
+// сохранённые в справочнике vehicles варианты (плюс всегда доступный
+// пункт "Не выбрано"), в конце — "Свой вариант…" для ручного ввода.
+function populateTransportSelect() {
+  const sel = document.getElementById('f-transport');
+  const names = [...vehicles].map(v => v.name).sort((a, b) => a.localeCompare(b, 'ru'));
+  sel.innerHTML = '<option value="">—</option>' +
+    names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('') +
+    '<option value="Не выбрано">Не выбрано</option>' +
+    '<option value="__custom__">Свой вариант…</option>';
+}
+
 // Заполняет выпадающий список партнёров в форме заказа актуальными данными
 function populatePartnerSelect() {
   const sel = document.getElementById('f-partner-select');
@@ -1231,7 +1253,24 @@ function openOrderModal(orderId) {
   document.getElementById('f-tour-type').value = o?.tour_type || 'CHR1_ChCh_1_day';
   document.getElementById('f-tour-name').value = o?.tour_name || '';
   document.getElementById('f-group-size').value = o?.group_size || 1;
-  document.getElementById('f-transport').value = o?.transport || '';
+  populateTransportSelect();
+  {
+    const transportSel = document.getElementById('f-transport');
+    const transportNew = document.getElementById('f-transport-new');
+    const val = o?.transport || '';
+    const known = new Set([...vehicles.map(v => v.name), 'Не выбрано', '']);
+    if (val && !known.has(val)) {
+      // старое значение или свой вариант, которого ещё нет в справочнике —
+      // показываем как выбранный "Свой вариант…" с текстом в поле рядом
+      transportSel.value = '__custom__';
+      transportNew.value = val;
+      transportNew.style.display = '';
+    } else {
+      transportSel.value = val;
+      transportNew.value = '';
+      transportNew.style.display = 'none';
+    }
+  }
   document.getElementById('f-customer-name').value = o?.customer_name || '';
   document.getElementById('f-customer-phone').value = o?.customer_phone || '';
   document.getElementById('f-customer-email').value = o?.customer_email || '';
@@ -1316,6 +1355,14 @@ function renderChecklistEditor() {
   });
 }
 
+const transportSelect = document.getElementById('f-transport');
+const transportCustomInput = document.getElementById('f-transport-new');
+transportSelect.onchange = () => {
+  const isCustom = transportSelect.value === '__custom__';
+  transportCustomInput.style.display = isCustom ? '' : 'none';
+  if (isCustom) transportCustomInput.focus();
+};
+
 const checklistSelect = document.getElementById('f-checklist-select');
 const checklistCustomInput = document.getElementById('f-checklist-new');
 
@@ -1383,13 +1430,20 @@ document.getElementById('f-partner-add-btn').onclick = () => {
 };
 
 document.getElementById('f-save').onclick = async () => {
+  // Если выбран "Свой вариант…" — берём текст из соседнего поля;
+  // иначе значение обычного выпадающего списка (справочник + "Не выбрано").
+  let transportValue = document.getElementById('f-transport').value || null;
+  if (transportValue === '__custom__') {
+    transportValue = document.getElementById('f-transport-new').value.trim() || null;
+  }
+
   const payload = {
     tour_date: document.getElementById('f-tour-date').value,
     tour_time: document.getElementById('f-tour-time').value || null,
     tour_type: document.getElementById('f-tour-type').value,
     tour_name: document.getElementById('f-tour-name').value,
     group_size: parseInt(document.getElementById('f-group-size').value) || 1,
-    transport: document.getElementById('f-transport').value || null,
+    transport: transportValue,
     customer_name: document.getElementById('f-customer-name').value,
     customer_phone: document.getElementById('f-customer-phone').value || null,
     customer_email: document.getElementById('f-customer-email').value || null,
@@ -1424,6 +1478,16 @@ document.getElementById('f-save').onclick = async () => {
     const { data, error } = await sb.from('orders').insert({ ...payload, created_by: user?.id }).select().single();
     if (error) { alert('Ошибка сохранения: ' + error.message); return; }
     orderId = data.id;
+  }
+
+  // если ввели новый свой вариант транспорта — сохраняем его в справочник
+  // vehicles, чтобы в следующий раз он был доступен для выбора из списка
+  if (transportValue && transportValue !== 'Не выбрано') {
+    const alreadyKnown = vehicles.some(v => v.name.toLowerCase() === transportValue.toLowerCase());
+    if (!alreadyKnown) {
+      const { error: vErr } = await sb.from('vehicles').upsert({ name: transportValue }, { onConflict: 'name', ignoreDuplicates: true });
+      if (vErr) console.error(vErr); // не критично для сохранения заказа — просто не попадёт в справочник
+    }
   }
 
   // синхронизация чек-листа
