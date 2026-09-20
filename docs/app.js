@@ -1596,7 +1596,8 @@ const tripPurposeInput = document.getElementById('tr-purpose');
 function populateTripVehicleSelect() {
   const current = tripVehicleSelect.value;
   tripVehicleSelect.innerHTML = [...vehicles].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
-    .map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+    .map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('') +
+    '<option value="__custom__">Свой вариант…</option>';
   if (current) tripVehicleSelect.value = current;
 }
 
@@ -1607,6 +1608,28 @@ function populateTripOrderSelect() {
   tripOrderSelect.innerHTML = '<option value="">— не привязана к заказу —</option>' +
     sorted.map(o => `<option value="${o.id}">${fmtDate(o.tour_date)} — ${escapeHtml(o.customer_name || '(без имени)')} (${escapeHtml(TOUR_SHORT[o.tour_type] || o.tour_type)})</option>`).join('');
   tripOrderSelect.value = current;
+}
+
+const tripVehicleCustomInput = document.getElementById('tr-vehicle-new');
+tripVehicleSelect.onchange = () => {
+  const isCustom = tripVehicleSelect.value === '__custom__';
+  tripVehicleCustomInput.style.display = isCustom ? '' : 'none';
+  if (isCustom) tripVehicleCustomInput.focus();
+};
+
+// Если выбран "Свой вариант…" — находим/создаём машину в справочнике
+// vehicles и возвращаем её id (vehicle_trips.vehicle_id — это ссылка на
+// vehicles, а не свободный текст, поэтому просто вписать название нельзя —
+// сначала нужно завести/найти запись в справочнике)
+async function resolveTripVehicleId() {
+  if (tripVehicleSelect.value !== '__custom__') return tripVehicleSelect.value;
+  const name = tripVehicleCustomInput.value.trim();
+  if (!name) return null;
+  const existing = vehicles.find(v => v.name.toLowerCase() === name.toLowerCase());
+  if (existing) return existing.id;
+  const { data, error } = await sb.from('vehicles').insert({ name }).select().single();
+  if (error) { alert('Ошибка добавления автомобиля в справочник: ' + error.message); return null; }
+  return data.id;
 }
 
 function updateTripDistanceDisplay() {
@@ -1648,6 +1671,8 @@ function openTripModal(tripId) {
 
   populateTripVehicleSelect();
   tripVehicleSelect.value = t?.vehicle_id || (vehicles[0]?.id || '');
+  tripVehicleCustomInput.value = '';
+  tripVehicleCustomInput.style.display = 'none';
 
   // Дата НЕ проставляется по умолчанию сегодняшним числом (в отличие от
   // формы заказа) — иначе выбор связанного заказа никогда не смог бы её
@@ -1675,8 +1700,10 @@ function closeTripModal() {
 document.getElementById('tr-cancel').onclick = () => closeTripModal();
 
 document.getElementById('tr-save').onclick = async () => {
-  const vehicleId = tripVehicleSelect.value;
-  if (!vehicleId) { alert('Выберите автомобиль'); return; }
+  if (tripVehicleSelect.value === '__custom__' && !tripVehicleCustomInput.value.trim()) { alert('Введите название/номер автомобиля'); return; }
+  if (!tripVehicleSelect.value) { alert('Выберите автомобиль'); return; }
+  const vehicleId = await resolveTripVehicleId();
+  if (!vehicleId) return; // либо пустой ввод, либо ошибка добавления в справочник (уже показана)
   const tripDate = tripDateInput.value;
   if (!tripDate) { alert('Укажите дату поездки'); return; }
 
