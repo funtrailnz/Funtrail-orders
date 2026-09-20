@@ -51,6 +51,7 @@
       <button id="tab-finance">Финансы</button>
       <button id="tab-partners">Партнёры</button>
       <button id="tab-tasks">Задачи</button>
+      <button id="tab-logbook">Логбук</button>
       <button id="tab-ltd">LTD чек-лист</button>
     </div>
 
@@ -67,6 +68,7 @@
         <button data-view="finance">Финансы</button>
         <button data-view="partners">Партнёры</button>
         <button data-view="tasks">Задачи</button>
+        <button data-view="logbook">Логбук</button>
         <button data-view="ltd">LTD чек-лист</button>
       </div>
     </div>
@@ -100,6 +102,9 @@
 
       <!-- Вид: задачи (дневник дел бизнеса) -->
       <div id="view-tasks" style="display:none;"></div>
+
+      <!-- Вид: логбук транспорта -->
+      <div id="view-logbook" style="display:none;"></div>
 
       <!-- Вид: чек-лист регистрации LTD -->
       <div id="view-ltd" style="display:none;"></div>
@@ -440,6 +445,83 @@
         <div class="right">
           <button class="secondary" id="pt-cancel">Отмена</button>
           <button id="pt-save">Сохранить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Модалка поездки (логбук транспорта) ============ -->
+  <div id="trip-modal" class="modal-backdrop" style="display:none;">
+    <div class="modal">
+      <h2 id="trip-modal-title">Новая поездка</h2>
+
+      <label>Связанный заказ (необязательно)</label>
+      <select id="tr-order-select">
+        <option value="">— не привязана к заказу —</option>
+      </select>
+      <p class="modal-hint">Если выбрать заказ — дата, машина и цель поездки подставятся автоматически (можно поправить вручную).</p>
+
+      <div class="grid2">
+        <div>
+          <label>Автомобиль</label>
+          <select id="tr-vehicle"></select>
+        </div>
+        <div>
+          <label>Дата поездки</label>
+          <input type="date" id="tr-date" />
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label>Одометр — начало (км)</label>
+          <input type="number" id="tr-odo-start" step="0.1" />
+        </div>
+        <div>
+          <label>Одометр — конец (км)</label>
+          <input type="number" id="tr-odo-end" step="0.1" />
+        </div>
+      </div>
+      <div class="warn-line" id="tr-distance-display"></div>
+
+      <label>Цель / маршрут поездки</label>
+      <input type="text" id="tr-purpose" placeholder="напр. Крайстчерч — Акароа, тур с клиентом" />
+
+      <div class="grid2">
+        <div>
+          <label style="margin-top:26px;">
+            <input type="checkbox" id="tr-is-business" style="width:auto; margin-right:6px;" checked />
+            Бизнес-поездка
+          </label>
+        </div>
+        <div>
+          <label>Водитель</label>
+          <input type="text" id="tr-driver" placeholder="напр. Слава" />
+        </div>
+      </div>
+
+      <div class="section-title">Топливо (необязательно)</div>
+      <div class="grid2">
+        <div>
+          <label>Литров</label>
+          <input type="number" id="tr-fuel-liters" step="0.01" placeholder="0" />
+        </div>
+        <div>
+          <label>Сумма (NZD)</label>
+          <input type="number" id="tr-fuel-cost" step="0.01" placeholder="0" />
+        </div>
+      </div>
+
+      <label>Заметка</label>
+      <input type="text" id="tr-note" placeholder="необязательно" />
+
+      <div class="modal-footer">
+        <div>
+          <button class="danger" id="tr-delete" style="display:none;">Удалить</button>
+        </div>
+        <div class="right">
+          <button class="secondary" id="tr-cancel">Отмена</button>
+          <button id="tr-save">Сохранить</button>
         </div>
       </div>
     </div>

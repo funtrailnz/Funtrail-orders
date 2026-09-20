@@ -77,6 +77,13 @@ let editingOrderPartners = []; // рабочая копия привязанны
 let taskCategories = []; // справочник категорий задач (можно добавлять свой вариант)
 let businessTasks = []; // дневник задач бизнеса (не привязаны к конкретному туру)
 let editingTaskId = null;
+let vehicleTrips = []; // логбук — все поездки по всем машинам
+let editingTripId = null;
+let logbookVehicleFilter = ''; // '' = показать все машины
+// По умолчанию — последние 90 дней: именно столько IRD требует вести журнал
+// подряд, чтобы установить % бизнес-использования автомобиля
+let logbookFrom = null;
+let logbookTo = null;
 let currentMonth = new Date(); currentMonth.setDate(1);
 let financeMonth = new Date(); financeMonth.setDate(1);
 let financeMode = 'month'; // 'month' | 'custom' | 'all' — переключатель периода на вкладке "Финансы"
@@ -380,6 +387,10 @@ async function loadAll() {
   const { data: tasksData, error: e12 } = await sb.from('business_tasks').select('*').order('due_date', { ascending: true });
   if (e12) { console.error(e12); } // таблица могла быть ещё не создана — тогда просто не показываем задачи
   else businessTasks = tasksData || [];
+
+  const { data: tripsData, error: e13 } = await sb.from('vehicle_trips').select('*').order('trip_date', { ascending: false });
+  if (e13) { console.error(e13); } // таблица могла быть ещё не создана — тогда просто не показываем логбук
+  else vehicleTrips = tripsData || [];
 }
 
 function subscribeRealtime() {
@@ -443,13 +454,18 @@ function subscribeRealtime() {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
+  sb.channel('public:vehicle_trips')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_trips' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
 }
 
 // ------------------------------------------------------------
 // Переключение вкладок-видов
 // ------------------------------------------------------------
-const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners'), tasks: document.getElementById('tab-tasks'), ltd: document.getElementById('tab-ltd') };
-const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners'), tasks: document.getElementById('view-tasks'), ltd: document.getElementById('view-ltd') };
+const viewTabs = { calendar: document.getElementById('tab-calendar'), upcoming: document.getElementById('tab-upcoming'), all: document.getElementById('tab-all'), finance: document.getElementById('tab-finance'), partners: document.getElementById('tab-partners'), tasks: document.getElementById('tab-tasks'), logbook: document.getElementById('tab-logbook'), ltd: document.getElementById('tab-ltd') };
+const viewEls = { calendar: document.getElementById('view-calendar'), upcoming: document.getElementById('view-upcoming'), all: document.getElementById('view-all'), finance: document.getElementById('view-finance'), partners: document.getElementById('view-partners'), tasks: document.getElementById('view-tasks'), logbook: document.getElementById('view-logbook'), ltd: document.getElementById('view-ltd') };
 Object.keys(viewTabs).forEach(key => {
   viewTabs[key].onclick = () => {
     activeView = key;
@@ -464,7 +480,7 @@ Object.keys(viewTabs).forEach(key => {
 // (видимость переключается в style.css через media query). Переиспользует
 // клики по обычным вкладкам выше, чтобы логика переключения не дублировалась.
 // ------------------------------------------------------------
-const VIEW_LABELS_MOBILE = { calendar: 'Календарь', upcoming: 'Ближайшие', all: 'Все заказы', finance: 'Финансы', partners: 'Партнёры', tasks: 'Задачи', ltd: 'LTD чек-лист' };
+const VIEW_LABELS_MOBILE = { calendar: 'Календарь', upcoming: 'Ближайшие', all: 'Все заказы', finance: 'Финансы', partners: 'Партнёры', tasks: 'Задачи', logbook: 'Логбук', ltd: 'LTD чек-лист' };
 const mobileMenuBtn = document.getElementById('mobile-menu-btn');
 const mobileMenuLabel = document.getElementById('mobile-menu-label');
 const mobileMenuDropdown = document.getElementById('mobile-menu-dropdown');
@@ -498,6 +514,7 @@ function renderCurrentView() {
   else if (activeView === 'finance') renderFinance();
   else if (activeView === 'partners') renderPartners();
   else if (activeView === 'tasks') renderTasks();
+  else if (activeView === 'logbook') renderLogbook();
   else renderLtdChecklist();
 }
 
@@ -1433,6 +1450,324 @@ document.getElementById('tk-delete').onclick = async () => {
   renderCurrentView();
   closeTaskModal();
 };
+
+// ------------------------------------------------------------
+// Логбук транспорта — журнал поездок по каждой машине из справочника
+// vehicles. Нужен для двух целей: (а) налоговая отчётность IRD — %
+// бизнес-использования автомобиля устанавливается по журналу минимум за
+// 90 дней подряд с показаниями одометра на начало/конец каждой поездки;
+// (б) внутренний учёт километража и топливных расходов по машинам.
+// ------------------------------------------------------------
+function renderLogbook() {
+  const box = document.getElementById('view-logbook');
+
+  // Период по умолчанию — последние 90 дней (см. комментарий выше про IRD)
+  if (!logbookFrom || !logbookTo) {
+    logbookTo = todayStr();
+    const from = new Date(); from.setDate(from.getDate() - 89);
+    logbookFrom = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`;
+  }
+
+  const filtered = vehicleTrips.filter(t =>
+    (!logbookVehicleFilter || t.vehicle_id === logbookVehicleFilter) &&
+    t.trip_date >= logbookFrom && t.trip_date <= logbookTo
+  );
+
+  // итоги по машинам за выбранный период — км всего/бизнес/%, топливо
+  const byVehicle = {};
+  filtered.forEach(t => {
+    const key = t.vehicle_id;
+    if (!byVehicle[key]) byVehicle[key] = { km: 0, businessKm: 0, trips: 0, fuelCost: 0 };
+    const km = Number(t.distance_km) || 0;
+    byVehicle[key].km += km;
+    if (t.is_business) byVehicle[key].businessKm += km;
+    byVehicle[key].trips++;
+    byVehicle[key].fuelCost += Number(t.fuel_cost) || 0;
+  });
+  const vehicleRows = Object.entries(byVehicle).map(([vehicleId, v]) => {
+    const vehicle = vehicles.find(x => x.id === vehicleId);
+    return { name: vehicle ? vehicle.name : 'Машина удалена', ...v, businessPct: v.km ? Math.round(v.businessKm / v.km * 100) : 0 };
+  }).sort((a, b) => b.km - a.km);
+
+  box.innerHTML = `
+    <div class="expenses-toolbar">
+      <div class="section-title">Логбук транспорта</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="secondary" id="btn-export-logbook">⬇ Экспорт XLSX</button>
+        <button id="btn-new-trip">+ Поездка</button>
+      </div>
+    </div>
+
+    <div class="fin-range-picker">
+      <div>
+        <label>Автомобиль</label>
+        <select id="logbook-vehicle-filter">
+          <option value="">Все машины</option>
+          ${vehicles.map(v => `<option value="${v.id}" ${v.id === logbookVehicleFilter ? 'selected' : ''}>${escapeHtml(v.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label>С</label>
+        <input type="date" id="logbook-from" value="${logbookFrom}" />
+      </div>
+      <div>
+        <label>По</label>
+        <input type="date" id="logbook-to" value="${logbookTo}" />
+      </div>
+    </div>
+    <p class="modal-hint">По умолчанию — последние 90 дней: именно столько IRD требует вести журнал подряд, чтобы установить % бизнес-использования автомобиля.</p>
+
+    <div class="section-title">Итоги по машинам за период</div>
+    ${vehicleRows.length ? `
+    <table class="fin-table">
+      <thead><tr><th>Машина</th><th class="num">Поездок</th><th class="num">Всего км</th><th class="num">Бизнес км</th><th class="num">% бизнес</th><th class="num">Топливо</th></tr></thead>
+      <tbody>
+        ${vehicleRows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.name)}</td>
+            <td class="num">${r.trips}</td>
+            <td class="num">${fmtMoney(r.km)}</td>
+            <td class="num">${fmtMoney(r.businessKm)}</td>
+            <td class="num ${r.businessPct >= 60 ? 'margin-good' : 'margin-mid'}">${r.businessPct}%</td>
+            <td class="num">${fmtMoney(r.fuelCost)} NZD</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>` : `<div class="empty-hint">За этот период поездок нет</div>`}
+
+    <div class="section-title">Поездки</div>
+    <div id="logbook-trips-list"></div>
+  `;
+
+  const listBox = document.getElementById('logbook-trips-list');
+  const sorted = [...filtered].sort((a, b) => b.trip_date.localeCompare(a.trip_date));
+  if (!sorted.length) {
+    listBox.innerHTML = '<div class="empty-hint">Поездок за этот период нет</div>';
+  } else {
+    sorted.forEach(t => listBox.appendChild(tripCard(t)));
+  }
+
+  document.getElementById('btn-new-trip').onclick = () => openTripModal(null);
+  document.getElementById('btn-export-logbook').onclick = () => exportLogbookXlsx(filtered, vehicleRows);
+  document.getElementById('logbook-vehicle-filter').onchange = (e) => { logbookVehicleFilter = e.target.value; renderLogbook(); };
+  document.getElementById('logbook-from').onchange = (e) => {
+    logbookFrom = e.target.value || logbookFrom;
+    if (logbookFrom > logbookTo) logbookTo = logbookFrom;
+    renderLogbook();
+  };
+  document.getElementById('logbook-to').onchange = (e) => {
+    logbookTo = e.target.value || logbookTo;
+    if (logbookTo < logbookFrom) logbookFrom = logbookTo;
+    renderLogbook();
+  };
+}
+
+function tripCard(t) {
+  const card = document.createElement('div');
+  card.className = 'order-card';
+  const vehicle = vehicles.find(v => v.id === t.vehicle_id);
+  const order = t.linked_order_id ? orders.find(o => o.id === t.linked_order_id) : null;
+  card.innerHTML = `
+    <div class="row1">
+      <div class="title">${escapeHtml(vehicle ? vehicle.name : 'Машина удалена')}</div>
+      <div class="badge ${t.is_business ? 'status-business-yes' : 'status-business-no'}">${t.is_business ? 'Бизнес' : 'Личное'}</div>
+    </div>
+    <div class="meta">
+      📅 ${fmtDate(t.trip_date)}${t.distance_km != null ? ' · ' + fmtMoney(t.distance_km) + ' км' : ''}
+      ${t.driver ? ' · 🧑 ' + escapeHtml(t.driver) : ''}
+    </div>
+    ${t.purpose ? `<div class="meta">${escapeHtml(t.purpose)}</div>` : ''}
+    ${order ? `<div class="meta">🔗 ${escapeHtml(order.customer_name || '')} — ${escapeHtml(TOUR_SHORT[order.tour_type] || order.tour_type)}, ${fmtDate(order.tour_date)}</div>` : ''}
+    ${(t.fuel_liters || t.fuel_cost) ? `<div class="meta">⛽ ${t.fuel_liters ? fmtMoney(t.fuel_liters) + ' л' : ''}${t.fuel_liters && t.fuel_cost ? ' · ' : ''}${t.fuel_cost ? fmtMoney(t.fuel_cost) + ' NZD' : ''}</div>` : ''}
+  `;
+  card.onclick = () => openTripModal(t.id);
+  return card;
+}
+
+const tripModal = document.getElementById('trip-modal');
+const tripVehicleSelect = document.getElementById('tr-vehicle');
+const tripOrderSelect = document.getElementById('tr-order-select');
+const tripOdoStart = document.getElementById('tr-odo-start');
+const tripOdoEnd = document.getElementById('tr-odo-end');
+const tripDistanceDisplay = document.getElementById('tr-distance-display');
+const tripDateInput = document.getElementById('tr-date');
+const tripPurposeInput = document.getElementById('tr-purpose');
+
+function populateTripVehicleSelect() {
+  const current = tripVehicleSelect.value;
+  tripVehicleSelect.innerHTML = [...vehicles].sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+    .map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('');
+  if (current) tripVehicleSelect.value = current;
+}
+
+// Последние 60 туров — чтобы список не был бесконечным по мере роста базы
+function populateTripOrderSelect() {
+  const current = tripOrderSelect.value;
+  const sorted = [...orders].sort((a, b) => b.tour_date.localeCompare(a.tour_date)).slice(0, 60);
+  tripOrderSelect.innerHTML = '<option value="">— не привязана к заказу —</option>' +
+    sorted.map(o => `<option value="${o.id}">${fmtDate(o.tour_date)} — ${escapeHtml(o.customer_name || '(без имени)')} (${escapeHtml(TOUR_SHORT[o.tour_type] || o.tour_type)})</option>`).join('');
+  tripOrderSelect.value = current;
+}
+
+function updateTripDistanceDisplay() {
+  const start = parseFloat(tripOdoStart.value);
+  const end = parseFloat(tripOdoEnd.value);
+  if (!isNaN(start) && !isNaN(end)) {
+    const dist = end - start;
+    tripDistanceDisplay.textContent = dist >= 0 ? `Расстояние: ${fmtMoney(dist)} км` : '⚠️ Одометр на конец меньше, чем на начало';
+  } else {
+    tripDistanceDisplay.textContent = '';
+  }
+}
+[tripOdoStart, tripOdoEnd].forEach(el => el.addEventListener('input', updateTripDistanceDisplay));
+
+// При выборе связанного заказа подставляем дату/цель/машину — но только в
+// ПУСТЫЕ поля, чтобы не затереть то, что пользователь уже ввёл вручную
+tripOrderSelect.onchange = () => {
+  const orderId = tripOrderSelect.value;
+  if (!orderId) return;
+  const o = orders.find(x => x.id === orderId);
+  if (!o) return;
+  if (!tripDateInput.value) tripDateInput.value = o.tour_date;
+  if (!tripPurposeInput.value) tripPurposeInput.value = `${TOUR_LABELS[o.tour_type] || o.tour_type}${o.customer_name ? ' — ' + o.customer_name : ''}`;
+  const orderVehicleList = orderVehiclesByOrder[o.id] || [];
+  if (orderVehicleList.length) {
+    const match = vehicles.find(v => v.name === orderVehicleList[0].vehicle_name);
+    if (match) tripVehicleSelect.value = match.id;
+  }
+};
+
+function openTripModal(tripId) {
+  editingTripId = tripId;
+  const t = tripId ? vehicleTrips.find(x => x.id === tripId) : null;
+  document.getElementById('trip-modal-title').textContent = t ? 'Редактировать поездку' : 'Новая поездка';
+  document.getElementById('tr-delete').style.display = t ? 'inline-block' : 'none';
+
+  populateTripOrderSelect();
+  tripOrderSelect.value = t?.linked_order_id || '';
+
+  populateTripVehicleSelect();
+  tripVehicleSelect.value = t?.vehicle_id || (vehicles[0]?.id || '');
+
+  // Дата НЕ проставляется по умолчанию сегодняшним числом (в отличие от
+  // формы заказа) — иначе выбор связанного заказа никогда не смог бы её
+  // подставить (поле считалось бы уже "заполненным"). Пусто = пользователь
+  // либо выберет заказ (дата подставится сама), либо введёт дату вручную.
+  tripDateInput.value = t?.trip_date || '';
+  tripOdoStart.value = t?.odometer_start ?? '';
+  tripOdoEnd.value = t?.odometer_end ?? '';
+  updateTripDistanceDisplay();
+  tripPurposeInput.value = t?.purpose || '';
+  document.getElementById('tr-is-business').checked = t ? !!t.is_business : true;
+  document.getElementById('tr-driver').value = t?.driver || '';
+  document.getElementById('tr-fuel-liters').value = t?.fuel_liters ?? '';
+  document.getElementById('tr-fuel-cost').value = t?.fuel_cost ?? '';
+  document.getElementById('tr-note').value = t?.note || '';
+
+  tripModal.style.display = 'flex';
+}
+
+function closeTripModal() {
+  tripModal.style.display = 'none';
+  editingTripId = null;
+}
+
+document.getElementById('tr-cancel').onclick = () => closeTripModal();
+
+document.getElementById('tr-save').onclick = async () => {
+  const vehicleId = tripVehicleSelect.value;
+  if (!vehicleId) { alert('Выберите автомобиль'); return; }
+  const tripDate = tripDateInput.value;
+  if (!tripDate) { alert('Укажите дату поездки'); return; }
+
+  const odoStart = tripOdoStart.value ? parseFloat(tripOdoStart.value) : null;
+  const odoEnd = tripOdoEnd.value ? parseFloat(tripOdoEnd.value) : null;
+  if (odoStart != null && odoEnd != null && odoEnd < odoStart) {
+    if (!confirm('Одометр на конец меньше, чем на начало — это точно верно? Сохранить как есть?')) return;
+  }
+
+  // distance_km — сгенерированная колонка в БД (odometer_end - odometer_start),
+  // её нельзя передавать напрямую в insert/update
+  const payload = {
+    vehicle_id: vehicleId,
+    linked_order_id: tripOrderSelect.value || null,
+    trip_date: tripDate,
+    odometer_start: odoStart,
+    odometer_end: odoEnd,
+    purpose: tripPurposeInput.value || null,
+    is_business: document.getElementById('tr-is-business').checked,
+    driver: document.getElementById('tr-driver').value || null,
+    fuel_liters: document.getElementById('tr-fuel-liters').value ? parseFloat(document.getElementById('tr-fuel-liters').value) : null,
+    fuel_cost: document.getElementById('tr-fuel-cost').value ? parseFloat(document.getElementById('tr-fuel-cost').value) : null,
+    note: document.getElementById('tr-note').value || null
+  };
+
+  if (editingTripId) {
+    const { error } = await sb.from('vehicle_trips').update(payload).eq('id', editingTripId);
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  } else {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('vehicle_trips').insert({ ...payload, created_by: user?.id });
+    if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+  }
+
+  await loadAll();
+  renderCurrentView();
+  closeTripModal();
+};
+
+document.getElementById('tr-delete').onclick = async () => {
+  if (!editingTripId) return;
+  if (!confirm('Удалить эту запись логбука? Действие необратимо.')) return;
+  await sb.from('vehicle_trips').delete().eq('id', editingTripId);
+  await loadAll();
+  renderCurrentView();
+  closeTripModal();
+};
+
+// Экспорт логбука в XLSX (тот же паттерн SheetJS, что и exportPartnersXlsx) —
+// два листа: сами поездки за выбранный период + сводные итоги по машинам,
+// удобные сразу для передачи бухгалтеру/в IRD
+function exportLogbookXlsx(filteredTrips, vehicleRows) {
+  if (!filteredTrips.length) { alert('Нет поездок за выбранный период для экспорта'); return; }
+  const tripRows = [...filteredTrips].sort((a, b) => a.trip_date.localeCompare(b.trip_date)).map(t => {
+    const vehicle = vehicles.find(v => v.id === t.vehicle_id);
+    const order = t.linked_order_id ? orders.find(o => o.id === t.linked_order_id) : null;
+    return {
+      'Дата': fmtDate(t.trip_date),
+      'Автомобиль': vehicle ? vehicle.name : '',
+      'Одометр начало': t.odometer_start ?? '',
+      'Одометр конец': t.odometer_end ?? '',
+      'Км': t.distance_km ?? '',
+      'Бизнес/Личное': t.is_business ? 'Бизнес' : 'Личное',
+      'Цель/маршрут': t.purpose || '',
+      'Заказ': order ? `${order.customer_name || ''} (${fmtDate(order.tour_date)})` : '',
+      'Водитель': t.driver || '',
+      'Топливо, л': t.fuel_liters ?? '',
+      'Топливо, NZD': t.fuel_cost ?? '',
+      'Заметка': t.note || ''
+    };
+  });
+  const summaryRows = vehicleRows.map(r => ({
+    'Автомобиль': r.name,
+    'Поездок': r.trips,
+    'Всего км': Math.round(r.km * 10) / 10,
+    'Бизнес км': Math.round(r.businessKm * 10) / 10,
+    '% бизнес': r.businessPct,
+    'Топливо, NZD': Math.round(r.fuelCost * 100) / 100
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsTrips = XLSX.utils.json_to_sheet(tripRows);
+  wsTrips['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 28 }, { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 28 }];
+  XLSX.utils.book_append_sheet(wb, wsTrips, 'Поездки');
+
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{ wch: 22 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Итоги по авто');
+
+  XLSX.writeFile(wb, `funtrail-logbook-${logbookFrom}_${logbookTo}.xlsx`);
+}
 
 // ------------------------------------------------------------
 // Карточка заказа

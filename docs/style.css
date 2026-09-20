@@ -305,6 +305,10 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .status-done { background: #22c55e; }
 .order-card.task-urgent { border-left-color: var(--danger); }
 
+/* ---------- Логбук транспорта ---------- */
+.status-business-yes { background: #22c55e; }
+.status-business-no { background: #64748b; }
+
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }
