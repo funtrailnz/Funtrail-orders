@@ -309,6 +309,18 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .status-business-yes { background: #22c55e; }
 .status-business-no { background: #64748b; }
 
+/* ---------- Файлы в дневнике задач ---------- */
+.taskattachments { margin-top: 6px; }
+.taskattachment-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px;
+}
+.taskattachment-row .name { flex: 1 1 auto; font-weight: 600; word-break: break-all; }
+.taskattachment-row .note { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.taskattachment-row .ta-actions { display: flex; gap: 2px; flex: 0 0 auto; }
+.taskattachment-row .ta-actions button { padding: 4px 8px; font-size: 15px; }
+.taskattachments-add { margin-top: 8px; }
+.taskattachments-add input[type=file] { padding: 8px 10px; background: var(--panel-2); }
+
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }

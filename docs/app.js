@@ -77,6 +77,10 @@ let editingOrderPartners = []; // рабочая копия привязанны
 let taskCategories = []; // справочник категорий задач (можно добавлять свой вариант)
 let businessTasks = []; // дневник задач бизнеса (не привязаны к конкретному туру)
 let editingTaskId = null;
+let taskAttachmentsByTask = {}; // task_id -> [{ id, file_name, storage_path, content_type, size_bytes }]
+let editingTaskAttachments = []; // рабочая копия файлов в открытой модалке задачи (в т.ч. ещё не загруженные — с полем _file)
+const TASK_ATTACHMENTS_BUCKET = 'task-attachments';
+const TASK_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024; // 50 МБ — согласовано с лимитом бакета Supabase Storage
 let vehicleTrips = []; // логбук — все поездки по всем машинам
 let editingTripId = null;
 let logbookVehicleFilter = ''; // '' = показать все машины
@@ -391,6 +395,13 @@ async function loadAll() {
   const { data: tripsData, error: e13 } = await sb.from('vehicle_trips').select('*').order('trip_date', { ascending: false });
   if (e13) { console.error(e13); } // таблица могла быть ещё не создана — тогда просто не показываем логбук
   else vehicleTrips = tripsData || [];
+
+  const { data: attachmentsData, error: e14 } = await sb.from('task_attachments').select('*').order('uploaded_at', { ascending: true });
+  if (e14) { console.error(e14); } // таблица могла быть ещё не создана — тогда просто не показываем файлы
+  else {
+    taskAttachmentsByTask = {};
+    (attachmentsData || []).forEach(a => { (taskAttachmentsByTask[a.task_id] ||= []).push(a); });
+  }
 }
 
 function subscribeRealtime() {
@@ -456,6 +467,11 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel('public:vehicle_trips')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_trips' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:task_attachments')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'task_attachments' }, async () => {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
@@ -1330,9 +1346,18 @@ function taskCard(t) {
       ${dueLine}${t.category ? ' · ' + escapeHtml(t.category) : ''}
     </div>
     ${t.comment ? `<div class="meta">${escapeHtml(t.comment)}</div>` : ''}
+    ${(taskAttachmentsByTask[t.id] || []).length ? `<div class="checklist-mini">📎 Файлов: ${taskAttachmentsByTask[t.id].length}</div>` : ''}
   `;
   card.onclick = () => openTaskModal(t.id);
   return card;
+}
+
+function fmtFileSize(bytes) {
+  const n = Number(bytes);
+  if (!n && n !== 0) return '';
+  if (n < 1024) return n + ' Б';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' КБ';
+  return (Math.round(n / 1024 / 1024 * 10) / 10) + ' МБ';
 }
 
 const taskModal = document.getElementById('task-modal');
@@ -1388,12 +1413,91 @@ function openTaskModal(taskId) {
   document.getElementById('tk-comment').value = t?.comment || '';
   updateTaskPriorityVisibility();
 
+  editingTaskAttachments = t ? (taskAttachmentsByTask[t.id] || []).map(x => ({ ...x })) : [];
+  renderTaskAttachmentsEditor();
+  document.getElementById('tk-file-input').value = '';
+
   taskModal.style.display = 'flex';
 }
 
 function closeTaskModal() {
   taskModal.style.display = 'none';
   editingTaskId = null;
+  editingTaskAttachments = [];
+}
+
+// ------------------------------------------------------------
+// Файлы, прикреплённые к задаче (в модалке) — можно добавить сколько
+// угодно, любого типа; сама загрузка в Storage происходит при сохранении
+// задачи (см. tk-save), здесь только редактирование рабочего списка
+// ------------------------------------------------------------
+function renderTaskAttachmentsEditor() {
+  const box = document.getElementById('tk-attachments');
+  if (!editingTaskAttachments.length) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Файлов пока нет</div>';
+    return;
+  }
+  box.innerHTML = '';
+  editingTaskAttachments.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'taskattachment-row';
+    const sizeLabel = fmtFileSize(item._file ? item._file.size : item.size_bytes);
+    const pendingLabel = item._file ? ' · загрузится при сохранении' : '';
+    row.innerHTML = `
+      <span class="name">${escapeHtml(item.file_name)}</span>
+      <span class="note">${sizeLabel}${pendingLabel}</span>
+      <span class="ta-actions">
+        ${item.id ? `<button type="button" class="ghost ta-view" data-idx="${idx}" title="Просмотреть">👁</button><button type="button" class="ghost ta-download" data-idx="${idx}" title="Скачать">⬇</button>` : ''}
+        <button type="button" class="ghost ta-remove" data-idx="${idx}" title="Удалить">✕</button>
+      </span>
+    `;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('.ta-remove').forEach(btn => btn.onclick = (e) => {
+    const idx = +e.currentTarget.dataset.idx;
+    editingTaskAttachments.splice(idx, 1);
+    renderTaskAttachmentsEditor();
+  });
+  box.querySelectorAll('.ta-view').forEach(btn => btn.onclick = (e) => viewTaskAttachment(editingTaskAttachments[+e.currentTarget.dataset.idx]));
+  box.querySelectorAll('.ta-download').forEach(btn => btn.onclick = (e) => downloadTaskAttachment(editingTaskAttachments[+e.currentTarget.dataset.idx]));
+}
+
+document.getElementById('tk-file-input').onchange = (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    if (file.size > TASK_ATTACHMENT_MAX_BYTES) {
+      alert(`Файл "${file.name}" больше 50 МБ — не добавлен`);
+      continue;
+    }
+    editingTaskAttachments.push({ file_name: file.name, content_type: file.type || 'application/octet-stream', size_bytes: file.size, _file: file, _new: true });
+  }
+  e.target.value = '';
+  renderTaskAttachmentsEditor();
+};
+
+// Просмотр — открываем подписанную ссылку (бакет приватный) в новой
+// вкладке; браузер сам решит, показать (картинка/PDF) или предложить скачать
+async function viewTaskAttachment(item) {
+  if (!item.storage_path) return;
+  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).createSignedUrl(item.storage_path, 60);
+  if (error) { alert('Ошибка открытия файла: ' + error.message); return; }
+  window.open(data.signedUrl, '_blank');
+}
+
+// Скачивание — гарантированно сохраняет файл под исходным именем (в отличие
+// от просто ссылки, которая может открыться прямо в браузере)
+async function downloadTaskAttachment(item) {
+  if (!item.storage_path) return;
+  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).download(item.storage_path);
+  if (error) { alert('Ошибка скачивания файла: ' + error.message); return; }
+  const url = URL.createObjectURL(data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = item.file_name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 document.getElementById('tk-cancel').onclick = () => closeTaskModal();
@@ -1428,13 +1532,45 @@ document.getElementById('tk-save').onclick = async () => {
     }
   }
 
-  if (editingTaskId) {
-    const { error } = await sb.from('business_tasks').update(payload).eq('id', editingTaskId);
+  let taskId = editingTaskId;
+  if (taskId) {
+    const { error } = await sb.from('business_tasks').update(payload).eq('id', taskId);
     if (error) { alert('Ошибка сохранения: ' + error.message); return; }
   } else {
     const { data: { user } } = await sb.auth.getUser();
-    const { error } = await sb.from('business_tasks').insert({ ...payload, created_by: user?.id });
+    const { data, error } = await sb.from('business_tasks').insert({ ...payload, created_by: user?.id }).select().single();
     if (error) { alert('Ошибка сохранения: ' + error.message); return; }
+    taskId = data.id;
+  }
+
+  // синхронизация файлов: удаляем убранные (и из Storage, и метаданные),
+  // загружаем новые (ещё не имеющие .id — значит добавлены в этом сеансе
+  // редактирования и хранятся пока только как File-объект в _file)
+  const originalAttachments = taskAttachmentsByTask[taskId] || [];
+  const keepAttachmentIds = editingTaskAttachments.filter(x => x.id).map(x => x.id);
+  const removedAttachments = originalAttachments.filter(a => !keepAttachmentIds.includes(a.id));
+  for (const r of removedAttachments) {
+    await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove([r.storage_path]);
+    await sb.from('task_attachments').delete().eq('id', r.id);
+  }
+  if (editingTaskAttachments.some(item => item._new && item._file)) {
+    const { data: { user: currentUser } } = await sb.auth.getUser();
+    for (const item of editingTaskAttachments) {
+      if (!item._new || !item._file) continue;
+      const safeName = item.file_name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storagePath = `${taskId}/${Date.now()}_${safeName}`;
+      const { error: upErr } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).upload(storagePath, item._file, { contentType: item.content_type });
+      if (upErr) { alert(`Не удалось загрузить файл "${item.file_name}": ${upErr.message}`); continue; }
+      const { error: insErr } = await sb.from('task_attachments').insert({
+        task_id: taskId,
+        file_name: item.file_name,
+        storage_path: storagePath,
+        content_type: item.content_type,
+        size_bytes: item.size_bytes,
+        uploaded_by: currentUser?.id
+      });
+      if (insErr) console.error(insErr); // файл уже в Storage, но не критично, если карточка метаданных не встала — можно перезагрузить и добавить заново
+    }
   }
 
   await loadAll();
@@ -1445,6 +1581,10 @@ document.getElementById('tk-save').onclick = async () => {
 document.getElementById('tk-delete').onclick = async () => {
   if (!editingTaskId) return;
   if (!confirm('Удалить эту задачу? Действие необратимо.')) return;
+  const atts = taskAttachmentsByTask[editingTaskId] || [];
+  if (atts.length) {
+    await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove(atts.map(a => a.storage_path));
+  }
   await sb.from('business_tasks').delete().eq('id', editingTaskId);
   await loadAll();
   renderCurrentView();
