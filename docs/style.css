@@ -321,6 +321,33 @@ main { flex: 1; padding: 16px 18px 40px; max-width: 900px; width: 100%; margin: 
 .taskattachments-add { margin-top: 8px; }
 .taskattachments-add input[type=file] { padding: 8px 10px; background: var(--panel-2); }
 
+/* ---------- Просмотр задачи (только чтение) ---------- */
+#tk-view-block .meta { color: var(--text-dim); font-size: 14px; }
+
+/* ---------- Лог комментариев к задаче ---------- */
+.taskcomments { margin-top: 6px; max-height: 220px; overflow-y: auto; }
+.taskcomment-row { padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 14px; }
+.taskcomment-date { color: var(--text-dim); font-size: 12px; margin-bottom: 2px; }
+.taskcomment-body { white-space: pre-wrap; word-break: break-word; }
+.taskcomments-add { display: flex; gap: 8px; margin-top: 8px; align-items: flex-start; flex-wrap: wrap; }
+.taskcomments-add textarea { flex: 1 1 200px; }
+.taskcomments-add button { flex: 0 0 auto; }
+
+/* ---------- Подзадачи ---------- */
+.tasksubtasks { margin-top: 6px; }
+.tasksubtask-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border);
+  font-size: 14px; cursor: pointer;
+}
+.tasksubtask-row .badge { width: 10px; height: 10px; padding: 0; border-radius: 50%; flex: 0 0 auto; }
+.tasksubtask-row .title { flex: 1 1 auto; }
+.tasksubtask-row .title.done { text-decoration: line-through; color: var(--text-dim); }
+.tasksubtask-row .note { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+.tasksubtasks-add { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.tasksubtasks-add input[type=text] { flex: 1 1 160px; }
+.tasksubtasks-add input[type=date] { flex: 0 1 150px; }
+.tasksubtasks-add button { flex: 0 0 auto; }
+
 @media (max-width: 480px) {
   .grid2 { grid-template-columns: 1fr; }
   .cal-day { min-height: 52px; }

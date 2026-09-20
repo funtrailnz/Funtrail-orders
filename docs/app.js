@@ -75,10 +75,12 @@ let editingOrderExpenseItems = []; // рабочая копия доп. стат
 let editingPartnerId = null;
 let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
 let taskCategories = []; // справочник категорий задач (можно добавлять свой вариант)
-let businessTasks = []; // дневник задач бизнеса (не привязаны к конкретному туру)
-let editingTaskId = null;
+let businessTasks = []; // дневник задач бизнеса (не привязаны к конкретному туру); подзадачи — тоже строки этой таблицы, с заполненным parent_task_id
+let editingTaskId = null; // id задачи (или подзадачи), открытой в модалке сейчас
+let taskModalMode = 'view'; // 'view' | 'edit' — см. комментарий над #task-modal в index.html
+let taskModalReturnStack = []; // стек id родительских задач — чтобы после закрытия подзадачи вернуться к карточке родителя
 let taskAttachmentsByTask = {}; // task_id -> [{ id, file_name, storage_path, content_type, size_bytes }]
-let editingTaskAttachments = []; // рабочая копия файлов в открытой модалке задачи (в т.ч. ещё не загруженные — с полем _file)
+let taskCommentsByTask = {}; // task_id -> [{ id, body, created_at }], отсортировано по created_at (лог, не перезаписываемое поле)
 const TASK_ATTACHMENTS_BUCKET = 'task-attachments';
 const TASK_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024; // 50 МБ — согласовано с лимитом бакета Supabase Storage
 let vehicleTrips = []; // логбук — все поездки по всем машинам
@@ -237,6 +239,11 @@ function todayStr() {
 function fmtDate(d) {
   const dt = new Date(d + 'T00:00:00');
   return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function fmtDateTime(ts) {
+  const dt = new Date(ts);
+  return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' +
+    dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 function daysBetween(a, b) {
   const A = new Date(a + 'T00:00:00'), B = new Date(b + 'T00:00:00');
@@ -402,6 +409,13 @@ async function loadAll() {
     taskAttachmentsByTask = {};
     (attachmentsData || []).forEach(a => { (taskAttachmentsByTask[a.task_id] ||= []).push(a); });
   }
+
+  const { data: commentsData, error: e15 } = await sb.from('task_comments').select('*').order('created_at', { ascending: true });
+  if (e15) { console.error(e15); } // таблица могла быть ещё не создана — тогда просто не показываем лог комментариев
+  else {
+    taskCommentsByTask = {};
+    (commentsData || []).forEach(c => { (taskCommentsByTask[c.task_id] ||= []).push(c); });
+  }
 }
 
 function subscribeRealtime() {
@@ -472,6 +486,11 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel('public:task_attachments')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'task_attachments' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:task_comments')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'task_comments' }, async () => {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
@@ -1295,8 +1314,11 @@ function renderTasks() {
   `;
   document.getElementById('btn-new-task').onclick = () => openTaskModal(null);
 
-  const open = businessTasks.filter(t => t.status !== 'done');
-  const done = businessTasks.filter(t => t.status === 'done');
+  // подзадачи (parent_task_id заполнен) в общем списке не показываются —
+  // они видны только внутри карточки родительской задачи
+  const topLevel = businessTasks.filter(t => !t.parent_task_id);
+  const open = topLevel.filter(t => t.status !== 'done');
+  const done = topLevel.filter(t => t.status === 'done');
   const urgent = open.filter(taskIsUrgent);
 
   const urgentBox = document.getElementById('tasks-urgent-box');
@@ -1337,6 +1359,12 @@ function taskCard(t) {
   const dueLine = t.due_date
     ? `📅 ${fmtDate(t.due_date)}`
     : `${TASK_PRIORITY_LABELS[t.priority] || t.priority}`;
+  const subtasks = businessTasks.filter(x => x.parent_task_id === t.id);
+  const subtasksDone = subtasks.filter(x => x.status === 'done').length;
+  const badges = [];
+  if ((taskAttachmentsByTask[t.id] || []).length) badges.push(`📎 Файлов: ${taskAttachmentsByTask[t.id].length}`);
+  if ((taskCommentsByTask[t.id] || []).length) badges.push(`💬 ${taskCommentsByTask[t.id].length}`);
+  if (subtasks.length) badges.push(`☑️ Подзадачи: ${subtasksDone}/${subtasks.length}`);
   card.innerHTML = `
     <div class="row1">
       <div class="title">${escapeHtml(t.title)}</div>
@@ -1345,8 +1373,7 @@ function taskCard(t) {
     <div class="meta">
       ${dueLine}${t.category ? ' · ' + escapeHtml(t.category) : ''}
     </div>
-    ${t.comment ? `<div class="meta">${escapeHtml(t.comment)}</div>` : ''}
-    ${(taskAttachmentsByTask[t.id] || []).length ? `<div class="checklist-mini">📎 Файлов: ${taskAttachmentsByTask[t.id].length}</div>` : ''}
+    ${badges.length ? `<div class="checklist-mini">${badges.join(' &nbsp;·&nbsp; ')}</div>` : ''}
   `;
   card.onclick = () => openTaskModal(t.id);
   return card;
@@ -1388,12 +1415,29 @@ function updateTaskPriorityVisibility() {
 }
 taskDueDateInput.addEventListener('input', updateTaskPriorityVisibility);
 
+// ------------------------------------------------------------
+// Модалка задачи — режимы "Просмотр"/"Редактирование" (см. комментарий
+// над #task-modal в index.html). Комментарии/файлы/подзадачи пишутся в
+// базу СРАЗУ по клику (не ждут общего "Сохранить") — это и есть починка
+// жалобы "после сохранения не могу добавить файл/комментарий": раньше
+// они были частью общей формы и требовали общего Save, теперь это
+// самостоятельные действия, доступные, как только у задачи есть id.
+// ------------------------------------------------------------
 function openTaskModal(taskId) {
   editingTaskId = taskId;
   const t = taskId ? businessTasks.find(x => x.id === taskId) : null;
-  document.getElementById('task-modal-title').textContent = t ? 'Редактировать задачу' : 'Новая задача';
   document.getElementById('tk-delete').style.display = t ? 'inline-block' : 'none';
+  fillTaskEditFields(t);
+  setTaskModalMode(t ? 'view' : 'edit');
+  renderTaskCommentsBox();
+  renderTaskAttachmentsBox();
+  renderTaskSubtasksBox();
+  document.getElementById('tk-file-input').value = '';
+  taskModal.style.display = 'flex';
+}
 
+function fillTaskEditFields(t) {
+  document.getElementById('task-modal-title').textContent = t ? 'Редактировать задачу' : 'Новая задача';
   document.getElementById('tk-title').value = t?.title || '';
   populateTaskCategorySelect();
   taskCategorySelect.value = t?.category || '';
@@ -1410,97 +1454,265 @@ function openTaskModal(taskId) {
   taskDueDateInput.value = t?.due_date || '';
   document.getElementById('tk-priority').value = t?.priority || 'medium';
   document.getElementById('tk-status').value = t?.status || 'todo';
-  document.getElementById('tk-comment').value = t?.comment || '';
   updateTaskPriorityVisibility();
-
-  editingTaskAttachments = t ? (taskAttachmentsByTask[t.id] || []).map(x => ({ ...x })) : [];
-  renderTaskAttachmentsEditor();
-  document.getElementById('tk-file-input').value = '';
-
-  taskModal.style.display = 'flex';
 }
 
+// Переключение между "карточкой только для чтения" и формой редактирования.
+// Существующая задача по умолчанию открывается в 'view'; новая, ещё не
+// сохранённая — всегда в 'edit' (иначе нечего показывать в просмотре).
+function setTaskModalMode(mode) {
+  taskModalMode = mode;
+  const t = editingTaskId ? businessTasks.find(x => x.id === editingTaskId) : null;
+  document.getElementById('tk-view-block').style.display = (mode === 'view') ? '' : 'none';
+  document.getElementById('tk-edit-block').style.display = (mode === 'edit') ? '' : 'none';
+  document.getElementById('tk-cancel').style.display = (mode === 'edit') ? 'inline-block' : 'none';
+  document.getElementById('tk-save').style.display = (mode === 'edit') ? 'inline-block' : 'none';
+  document.getElementById('tk-edit-btn').style.display = (mode === 'view') ? 'inline-block' : 'none';
+  document.getElementById('tk-close-view').style.display = (mode === 'view') ? 'inline-block' : 'none';
+  if (mode === 'view' && t) renderTaskViewBlock(t);
+}
+
+function renderTaskViewBlock(t) {
+  document.getElementById('tk-view-title').textContent = t.title;
+  const badge = document.getElementById('tk-view-status-badge');
+  badge.className = 'badge status-' + t.status;
+  badge.textContent = TASK_STATUS_LABELS[t.status] || t.status;
+  const dueLine = t.due_date ? `📅 ${fmtDate(t.due_date)}` : (TASK_PRIORITY_LABELS[t.priority] || t.priority);
+  document.getElementById('tk-view-meta').innerHTML = `${dueLine}${t.category ? ' · ' + escapeHtml(t.category) : ''}`;
+}
+
+document.getElementById('tk-edit-btn').onclick = () => setTaskModalMode('edit');
+
+// "Отмена" в форме редактирования: у уже существующей задачи просто
+// возвращает в просмотр (без сохранения полей); у совсем новой, ещё
+// без id — закрывает модалку целиком (сохранять нечего).
+document.getElementById('tk-cancel').onclick = () => {
+  if (editingTaskId) setTaskModalMode('view');
+  else closeTaskModal();
+};
+document.getElementById('tk-close-view').onclick = () => closeTaskModal();
+
+// Стек "вернуться к родителю" — когда открываем подзадачу изнутри карточки
+// родительской задачи, при закрытии подзадачи должны вернуться к родителю,
+// а не просто захлопнуть модалку (см. openSubtaskModal ниже)
 function closeTaskModal() {
-  taskModal.style.display = 'none';
-  editingTaskId = null;
-  editingTaskAttachments = [];
-}
-
-// ------------------------------------------------------------
-// Файлы, прикреплённые к задаче (в модалке) — можно добавить сколько
-// угодно, любого типа; сама загрузка в Storage происходит при сохранении
-// задачи (см. tk-save), здесь только редактирование рабочего списка
-// ------------------------------------------------------------
-function renderTaskAttachmentsEditor() {
-  const box = document.getElementById('tk-attachments');
-  if (!editingTaskAttachments.length) {
-    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Файлов пока нет</div>';
+  if (taskModalReturnStack.length) {
+    const parentId = taskModalReturnStack.pop();
+    openTaskModal(parentId);
     return;
   }
-  box.innerHTML = '';
-  editingTaskAttachments.forEach((item, idx) => {
-    const row = document.createElement('div');
-    row.className = 'taskattachment-row';
-    const sizeLabel = fmtFileSize(item._file ? item._file.size : item.size_bytes);
-    const pendingLabel = item._file ? ' · загрузится при сохранении' : '';
-    row.innerHTML = `
-      <span class="name">${escapeHtml(item.file_name)}</span>
-      <span class="note">${sizeLabel}${pendingLabel}</span>
-      <span class="ta-actions">
-        ${item.id ? `<button type="button" class="ghost ta-view" data-idx="${idx}" title="Просмотреть">👁</button><button type="button" class="ghost ta-download" data-idx="${idx}" title="Скачать">⬇</button>` : ''}
-        <button type="button" class="ghost ta-remove" data-idx="${idx}" title="Удалить">✕</button>
-      </span>
-    `;
-    box.appendChild(row);
-  });
-  box.querySelectorAll('.ta-remove').forEach(btn => btn.onclick = (e) => {
-    const idx = +e.currentTarget.dataset.idx;
-    editingTaskAttachments.splice(idx, 1);
-    renderTaskAttachmentsEditor();
-  });
-  box.querySelectorAll('.ta-view').forEach(btn => btn.onclick = (e) => viewTaskAttachment(editingTaskAttachments[+e.currentTarget.dataset.idx]));
-  box.querySelectorAll('.ta-download').forEach(btn => btn.onclick = (e) => downloadTaskAttachment(editingTaskAttachments[+e.currentTarget.dataset.idx]));
+  taskModal.style.display = 'none';
+  editingTaskId = null;
 }
 
-document.getElementById('tk-file-input').onchange = (e) => {
+function openSubtaskModal(subtaskId) {
+  taskModalReturnStack.push(editingTaskId);
+  openTaskModal(subtaskId);
+}
+
+// ------------------------------------------------------------
+// Файлы, прикреплённые к задаче — можно добавить сколько угодно, любого
+// типа; загрузка в Storage происходит сразу при выборе файла (не ждёт
+// общего "Сохранить" задачи), поэтому доступна и в режиме просмотра.
+// ------------------------------------------------------------
+function renderTaskAttachmentsBox() {
+  const box = document.getElementById('tk-attachments');
+  const addBox = document.getElementById('tk-file-add-box');
+  const hint = document.getElementById('tk-file-hint');
+  if (!editingTaskId) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Файлов пока нет</div>';
+    addBox.style.display = 'none';
+    hint.textContent = 'Сначала сохраните задачу — после этого можно будет прикреплять файлы.';
+    return;
+  }
+  addBox.style.display = '';
+  hint.textContent = 'Можно прикрепить сколько угодно файлов (до 50 МБ каждый) — загружаются сразу.';
+  const items = taskAttachmentsByTask[editingTaskId] || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Файлов пока нет</div>';
+  } else {
+    box.innerHTML = items.map((item, idx) => `
+      <div class="taskattachment-row">
+        <span class="name">${escapeHtml(item.file_name)}</span>
+        <span class="note">${fmtFileSize(item.size_bytes)}</span>
+        <span class="ta-actions">
+          <button type="button" class="ghost ta-view" data-idx="${idx}" title="Просмотреть">👁</button>
+          <button type="button" class="ghost ta-download" data-idx="${idx}" title="Скачать">⬇</button>
+          <button type="button" class="ghost ta-remove" data-idx="${idx}" title="Удалить">✕</button>
+        </span>
+      </div>
+    `).join('');
+    box.querySelectorAll('.ta-view').forEach(btn => btn.onclick = (e) => viewTaskAttachment(items[+e.currentTarget.dataset.idx]));
+    box.querySelectorAll('.ta-download').forEach(btn => btn.onclick = (e) => downloadTaskAttachment(items[+e.currentTarget.dataset.idx]));
+    box.querySelectorAll('.ta-remove').forEach(btn => btn.onclick = (e) => deleteTaskAttachment(items[+e.currentTarget.dataset.idx]));
+  }
+}
+
+document.getElementById('tk-file-input').onchange = async (e) => {
   const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!editingTaskId || !files.length) return;
+  const { data: { user } } = await sb.auth.getUser();
   for (const file of files) {
     if (file.size > TASK_ATTACHMENT_MAX_BYTES) {
       alert(`Файл "${file.name}" больше 50 МБ — не добавлен`);
       continue;
     }
-    editingTaskAttachments.push({ file_name: file.name, content_type: file.type || 'application/octet-stream', size_bytes: file.size, _file: file, _new: true });
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `${editingTaskId}/${Date.now()}_${safeName}`;
+    const { error: upErr } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).upload(storagePath, file, { contentType: file.type || 'application/octet-stream' });
+    if (upErr) { alert(`Не удалось загрузить файл "${file.name}": ${upErr.message}`); continue; }
+    const { error: insErr } = await sb.from('task_attachments').insert({
+      task_id: editingTaskId,
+      file_name: file.name,
+      storage_path: storagePath,
+      content_type: file.type || 'application/octet-stream',
+      size_bytes: file.size,
+      uploaded_by: user?.id
+    });
+    if (insErr) alert(`Файл загружен, но не удалось сохранить запись о нём: ${insErr.message}`);
   }
-  e.target.value = '';
-  renderTaskAttachmentsEditor();
+  await loadAll();
+  renderTaskAttachmentsBox();
+  renderCurrentView();
 };
 
-// Просмотр — открываем подписанную ссылку (бакет приватный) в новой
-// вкладке; браузер сам решит, показать (картинка/PDF) или предложить скачать
-async function viewTaskAttachment(item) {
-  if (!item.storage_path) return;
-  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).createSignedUrl(item.storage_path, 60);
-  if (error) { alert('Ошибка открытия файла: ' + error.message); return; }
-  window.open(data.signedUrl, '_blank');
+async function deleteTaskAttachment(item) {
+  if (!confirm(`Удалить файл "${item.file_name}"?`)) return;
+  await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove([item.storage_path]);
+  await sb.from('task_attachments').delete().eq('id', item.id);
+  await loadAll();
+  renderTaskAttachmentsBox();
+  renderCurrentView();
 }
 
-// Скачивание — гарантированно сохраняет файл под исходным именем (в отличие
-// от просто ссылки, которая может открыться прямо в браузере)
+// Просмотр — открываем подписанную ссылку (бакет приватный) в новой
+// вкладке. Вкладку открываем СИНХРОННО прямо в обработчике клика, ДО
+// await — иначе браузер (особенно Safari/iOS) считает, что открытие
+// вкладки происходит не в прямом ответе на жест пользователя, и молча
+// блокирует его как всплывающее окно. Это и было причиной жалобы
+// "не могу просто просмотреть файл".
+async function viewTaskAttachment(item) {
+  if (!item.storage_path) return;
+  const win = window.open('', '_blank');
+  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).createSignedUrl(item.storage_path, 60);
+  if (error) { if (win) win.close(); alert('Ошибка открытия файла: ' + error.message); return; }
+  if (win) win.location.href = data.signedUrl;
+  else window.open(data.signedUrl, '_blank'); // на случай если браузер не дал открыть пустую вкладку заранее
+}
+
+// Скачивание — просим у Supabase подписанную ссылку с готовым заголовком
+// "Content-Disposition: attachment" (опция download), вместо ручной сборки
+// Blob через fetch: так надёжнее работает на iOS Safari, где скачивание
+// Blob-ссылок исторически ведёт себя нестабильно (то не срабатывает,
+// то открывает файл прямо в вкладке вместо сохранения).
 async function downloadTaskAttachment(item) {
   if (!item.storage_path) return;
-  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).download(item.storage_path);
+  const { data, error } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).createSignedUrl(item.storage_path, 60, { download: item.file_name });
   if (error) { alert('Ошибка скачивания файла: ' + error.message); return; }
-  const url = URL.createObjectURL(data);
   const a = document.createElement('a');
-  a.href = url;
+  a.href = data.signedUrl;
   a.download = item.file_name;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
-document.getElementById('tk-cancel').onclick = () => closeTaskModal();
+// ------------------------------------------------------------
+// Лог комментариев — в отличие от старого единственного поля "Комментарий",
+// это список отдельных заметок с датой; каждая новая ДОБАВЛЯЕТСЯ, а не
+// перезаписывает предыдущие. Пишется в базу сразу по клику "Добавить".
+// ------------------------------------------------------------
+function renderTaskCommentsBox() {
+  const box = document.getElementById('tk-comments');
+  const addBox = document.getElementById('tk-comment-add-box');
+  const hint = document.getElementById('tk-comment-hint');
+  if (!editingTaskId) {
+    box.innerHTML = '';
+    addBox.style.display = 'none';
+    hint.style.display = '';
+    return;
+  }
+  addBox.style.display = '';
+  hint.style.display = 'none';
+  const list = taskCommentsByTask[editingTaskId] || [];
+  box.innerHTML = !list.length
+    ? '<div class="empty-hint" style="padding:8px 0;">Комментариев пока нет</div>'
+    : list.map(c => `
+      <div class="taskcomment-row">
+        <div class="taskcomment-date">${fmtDateTime(c.created_at)}</div>
+        <div class="taskcomment-body">${escapeHtml(c.body).replace(/\n/g, '<br>')}</div>
+      </div>
+    `).join('');
+}
+
+document.getElementById('tk-comment-add-btn').onclick = async () => {
+  const input = document.getElementById('tk-comment-new');
+  const body = input.value.trim();
+  if (!body || !editingTaskId) return;
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from('task_comments').insert({ task_id: editingTaskId, body, created_by: user?.id });
+  if (error) { alert('Ошибка добавления комментария: ' + error.message); return; }
+  input.value = '';
+  await loadAll();
+  renderTaskCommentsBox();
+  renderCurrentView();
+};
+
+// ------------------------------------------------------------
+// Подзадачи — полноценные задачи (свой срок/статус/приоритет) с
+// заполненным parent_task_id; хранятся в той же таблице business_tasks.
+// В общем списке дневника не показываются, видны только здесь, внутри
+// карточки родителя. Быстрое добавление — название (+необязательный
+// срок), остальные поля можно донастроить, открыв саму подзадачу.
+// ------------------------------------------------------------
+function renderTaskSubtasksBox() {
+  const box = document.getElementById('tk-subtasks');
+  const addBox = document.getElementById('tk-subtask-add-box');
+  const hint = document.getElementById('tk-subtask-hint');
+  if (!editingTaskId) {
+    box.innerHTML = '';
+    addBox.style.display = 'none';
+    hint.style.display = '';
+    return;
+  }
+  addBox.style.display = '';
+  hint.style.display = 'none';
+  const list = businessTasks.filter(x => x.parent_task_id === editingTaskId)
+    .sort((a, b) => (a.due_date || '9999-99-99').localeCompare(b.due_date || '9999-99-99'));
+  box.innerHTML = !list.length
+    ? '<div class="empty-hint" style="padding:8px 0;">Подзадач пока нет</div>'
+    : list.map(s => `
+      <div class="tasksubtask-row" data-id="${s.id}">
+        <span class="badge status-${s.status}" title="${TASK_STATUS_LABELS[s.status] || s.status}"></span>
+        <span class="title${s.status === 'done' ? ' done' : ''}">${escapeHtml(s.title)}</span>
+        <span class="note">${s.due_date ? fmtDate(s.due_date) : (TASK_PRIORITY_LABELS[s.priority] || '')}</span>
+      </div>
+    `).join('');
+  box.querySelectorAll('.tasksubtask-row').forEach(row => row.onclick = () => openSubtaskModal(row.dataset.id));
+}
+
+document.getElementById('tk-subtask-add-btn').onclick = async () => {
+  const titleInput = document.getElementById('tk-subtask-title');
+  const dueInput = document.getElementById('tk-subtask-due');
+  const title = titleInput.value.trim();
+  if (!title || !editingTaskId) { if (!title) alert('Укажите название подзадачи'); return; }
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from('business_tasks').insert({
+    title,
+    due_date: dueInput.value || null,
+    priority: 'medium',
+    status: 'todo',
+    parent_task_id: editingTaskId,
+    created_by: user?.id
+  });
+  if (error) { alert('Ошибка добавления подзадачи: ' + error.message); return; }
+  titleInput.value = '';
+  dueInput.value = '';
+  await loadAll();
+  renderTaskSubtasksBox();
+  renderCurrentView();
+};
 
 document.getElementById('tk-save').onclick = async () => {
   const title = document.getElementById('tk-title').value.trim();
@@ -1518,7 +1730,6 @@ document.getElementById('tk-save').onclick = async () => {
     due_date: taskDueDateInput.value || null,
     priority: document.getElementById('tk-priority').value,
     status,
-    comment: document.getElementById('tk-comment').value || null,
     completed_at: status === 'done' ? (wasDone ? undefined : new Date().toISOString()) : null
   };
   if (payload.completed_at === undefined) delete payload.completed_at; // не трогаем уже проставленную дату завершения
@@ -1543,47 +1754,36 @@ document.getElementById('tk-save').onclick = async () => {
     taskId = data.id;
   }
 
-  // синхронизация файлов: удаляем убранные (и из Storage, и метаданные),
-  // загружаем новые (ещё не имеющие .id — значит добавлены в этом сеансе
-  // редактирования и хранятся пока только как File-объект в _file)
-  const originalAttachments = taskAttachmentsByTask[taskId] || [];
-  const keepAttachmentIds = editingTaskAttachments.filter(x => x.id).map(x => x.id);
-  const removedAttachments = originalAttachments.filter(a => !keepAttachmentIds.includes(a.id));
-  for (const r of removedAttachments) {
-    await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove([r.storage_path]);
-    await sb.from('task_attachments').delete().eq('id', r.id);
-  }
-  if (editingTaskAttachments.some(item => item._new && item._file)) {
-    const { data: { user: currentUser } } = await sb.auth.getUser();
-    for (const item of editingTaskAttachments) {
-      if (!item._new || !item._file) continue;
-      const safeName = item.file_name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storagePath = `${taskId}/${Date.now()}_${safeName}`;
-      const { error: upErr } = await sb.storage.from(TASK_ATTACHMENTS_BUCKET).upload(storagePath, item._file, { contentType: item.content_type });
-      if (upErr) { alert(`Не удалось загрузить файл "${item.file_name}": ${upErr.message}`); continue; }
-      const { error: insErr } = await sb.from('task_attachments').insert({
-        task_id: taskId,
-        file_name: item.file_name,
-        storage_path: storagePath,
-        content_type: item.content_type,
-        size_bytes: item.size_bytes,
-        uploaded_by: currentUser?.id
-      });
-      if (insErr) console.error(insErr); // файл уже в Storage, но не критично, если карточка метаданных не встала — можно перезагрузить и добавить заново
-    }
-  }
-
   await loadAll();
   renderCurrentView();
-  closeTaskModal();
+
+  // после сохранения (в т.ч. самого первого) переключаемся в просмотр —
+  // именно тогда становятся доступны комментарии/файлы/подзадачи
+  editingTaskId = taskId;
+  document.getElementById('tk-delete').style.display = 'inline-block';
+  fillTaskEditFields(businessTasks.find(x => x.id === taskId));
+  setTaskModalMode('view');
+  renderTaskCommentsBox();
+  renderTaskAttachmentsBox();
+  renderTaskSubtasksBox();
 };
 
 document.getElementById('tk-delete').onclick = async () => {
   if (!editingTaskId) return;
-  if (!confirm('Удалить эту задачу? Действие необратимо.')) return;
+  const isSubtask = !!businessTasks.find(x => x.id === editingTaskId)?.parent_task_id;
+  const childSubtasksCount = businessTasks.filter(x => x.parent_task_id === editingTaskId).length;
+  const warnExtra = childSubtasksCount ? ` Вместе с ней удалятся её подзадачи (${childSubtasksCount}).` : '';
+  if (!confirm(`Удалить эт${isSubtask ? 'у подзадачу' : 'у задачу'}? Действие необратимо.${warnExtra}`)) return;
   const atts = taskAttachmentsByTask[editingTaskId] || [];
   if (atts.length) {
     await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove(atts.map(a => a.storage_path));
+  }
+  // файлы подзадач тоже нужно явно почистить из Storage — метаданные и сама
+  // строка задачи удалятся каскадно на уровне БД, а вот бинарники в Storage
+  // база сама не тронет (см. tk-delete в основной задаче — та же логика)
+  for (const sub of businessTasks.filter(x => x.parent_task_id === editingTaskId)) {
+    const subAtts = taskAttachmentsByTask[sub.id] || [];
+    if (subAtts.length) await sb.storage.from(TASK_ATTACHMENTS_BUCKET).remove(subAtts.map(a => a.storage_path));
   }
   await sb.from('business_tasks').delete().eq('id', editingTaskId);
   await loadAll();

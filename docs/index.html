@@ -529,63 +529,98 @@
   </div>
 
   <!-- ============ Модалка задачи (дневник дел бизнеса) ============ -->
+  <!-- Два режима в одной модалке: "Просмотр" (только чтение шапки, но
+       комментарии/файлы/подзадачи полностью рабочие) и "Редактирование"
+       (форма для названия/категории/срока/приоритета/статуса). Клик по
+       карточке в списке открывает Просмотр; кнопка "Редактировать"
+       переключает на форму. У новой (ещё не сохранённой) задачи режим
+       всегда "Редактирование" — комментарии/файлы/подзадачи требуют уже
+       существующего id задачи (внешний ключ), поэтому недоступны, пока
+       задача не сохранена хотя бы раз. -->
   <div id="task-modal" class="modal-backdrop" style="display:none;">
     <div class="modal">
-      <h2 id="task-modal-title">Новая задача</h2>
-      <label>Название</label>
-      <input type="text" id="tk-title" placeholder="напр. Продлить страховку минивэна" />
 
-      <div class="grid2">
-        <div>
-          <label>Категория</label>
-          <select id="tk-category">
-            <option value="">— без категории —</option>
-            <option value="__custom__">Свой вариант…</option>
-          </select>
-          <input type="text" id="tk-category-new" placeholder="Введите свою категорию" style="display:none; margin-top:6px;" />
+      <div id="tk-view-block" style="display:none;">
+        <div class="row1" style="margin-bottom:6px;">
+          <h2 id="tk-view-title" style="margin:0;"></h2>
+          <div class="badge" id="tk-view-status-badge"></div>
         </div>
-        <div>
-          <label>Срок выполнения</label>
-          <input type="date" id="tk-due-date" />
+        <div class="meta" id="tk-view-meta"></div>
+      </div>
+
+      <div id="tk-edit-block">
+        <h2 id="task-modal-title">Новая задача</h2>
+        <label>Название</label>
+        <input type="text" id="tk-title" placeholder="напр. Продлить страховку минивэна" />
+
+        <div class="grid2">
+          <div>
+            <label>Категория</label>
+            <select id="tk-category">
+              <option value="">— без категории —</option>
+              <option value="__custom__">Свой вариант…</option>
+            </select>
+            <input type="text" id="tk-category-new" placeholder="Введите свою категорию" style="display:none; margin-top:6px;" />
+          </div>
+          <div>
+            <label>Срок выполнения</label>
+            <input type="date" id="tk-due-date" />
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div id="tk-priority-wrap">
+            <label>Приоритет (используется, если не задан срок)</label>
+            <select id="tk-priority">
+              <option value="urgent">🔥 Срочно</option>
+              <option value="medium" selected>Среднее</option>
+              <option value="low">Не срочно</option>
+            </select>
+          </div>
+          <div>
+            <label>Статус</label>
+            <select id="tk-status">
+              <option value="todo">Не начато</option>
+              <option value="in_progress">В работе</option>
+              <option value="done">Готово</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      <div class="grid2">
-        <div id="tk-priority-wrap">
-          <label>Приоритет (используется, если не задан срок)</label>
-          <select id="tk-priority">
-            <option value="urgent">🔥 Срочно</option>
-            <option value="medium" selected>Среднее</option>
-            <option value="low">Не срочно</option>
-          </select>
-        </div>
-        <div>
-          <label>Статус</label>
-          <select id="tk-status">
-            <option value="todo">Не начато</option>
-            <option value="in_progress">В работе</option>
-            <option value="done">Готово</option>
-          </select>
-        </div>
+      <div class="section-title">Комментарии</div>
+      <div class="taskcomments" id="tk-comments"></div>
+      <div class="taskcomments-add" id="tk-comment-add-box">
+        <textarea id="tk-comment-new" rows="2" placeholder="Новая заметка..."></textarea>
+        <button type="button" class="secondary" id="tk-comment-add-btn">Добавить комментарий</button>
       </div>
-
-      <label>Комментарий</label>
-      <textarea id="tk-comment" rows="3" placeholder="Детали, ссылки, контакты..."></textarea>
+      <p class="modal-hint" id="tk-comment-hint" style="display:none;">Сначала сохраните задачу — после этого можно будет добавлять комментарии.</p>
 
       <div class="section-title">Файлы</div>
       <div class="taskattachments" id="tk-attachments"></div>
-      <div class="taskattachments-add">
+      <div class="taskattachments-add" id="tk-file-add-box">
         <input type="file" id="tk-file-input" multiple />
       </div>
-      <p class="modal-hint">Можно прикрепить сколько угодно файлов (до 50 МБ каждый) — загрузятся при сохранении задачи.</p>
+      <p class="modal-hint" id="tk-file-hint">Можно прикрепить сколько угодно файлов (до 50 МБ каждый) — загружаются сразу.</p>
+
+      <div class="section-title">Подзадачи</div>
+      <div class="tasksubtasks" id="tk-subtasks"></div>
+      <div class="tasksubtasks-add" id="tk-subtask-add-box">
+        <input type="text" id="tk-subtask-title" placeholder="Название подзадачи" />
+        <input type="date" id="tk-subtask-due" title="Срок (необязательно)" />
+        <button type="button" class="secondary" id="tk-subtask-add-btn">+ Подзадача</button>
+      </div>
+      <p class="modal-hint" id="tk-subtask-hint" style="display:none;">Сначала сохраните задачу — после этого можно будет добавлять подзадачи.</p>
 
       <div class="modal-footer">
         <div>
           <button class="danger" id="tk-delete" style="display:none;">Удалить</button>
         </div>
         <div class="right">
-          <button class="secondary" id="tk-cancel">Отмена</button>
-          <button id="tk-save">Сохранить</button>
+          <button class="secondary" id="tk-cancel" style="display:none;">Отмена</button>
+          <button class="secondary" id="tk-edit-btn" style="display:none;">Редактировать</button>
+          <button id="tk-save" style="display:none;">Сохранить</button>
+          <button class="secondary" id="tk-close-view" style="display:none;">Закрыть</button>
         </div>
       </div>
     </div>
