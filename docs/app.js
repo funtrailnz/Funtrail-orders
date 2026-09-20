@@ -68,6 +68,8 @@ let blockedDays = []; // нерабочие дни: { kind: 'weekday'|'range', w
 let partners = []; // партнёры: транспорт, гиды, поставщики услуг
 let orderPartnersByOrder = {}; // order_id -> [{ id, partner_id, amount, note }]
 let vehicles = []; // справочник транспорта для формы заказа (можно добавлять свой вариант)
+let orderVehiclesByOrder = {}; // order_id -> [{ id, vehicle_name, note }] — на один тур может быть несколько машин
+let editingOrderVehicles = []; // рабочая копия списка транспорта в открытой модалке заказа
 let editingPartnerId = null;
 let editingOrderPartners = []; // рабочая копия привязанных партнёров в открытой модалке заказа
 let currentMonth = new Date(); currentMonth.setDate(1);
@@ -330,6 +332,15 @@ async function loadAll() {
   const { data: vehiclesData, error: e8 } = await sb.from('vehicles').select('*').order('name', { ascending: true });
   if (e8) { console.error(e8); } // таблица могла быть ещё не создана — тогда просто остаётся пустой список
   else vehicles = vehiclesData || [];
+
+  const { data: orderVehicles, error: e9 } = await sb.from('order_vehicles').select('*').order('created_at', { ascending: true });
+  if (e9) { console.error(e9); } // таблица могла быть ещё не создана — тогда просто не показываем список транспорта
+  else {
+    orderVehiclesByOrder = {};
+    (orderVehicles || []).forEach(ov => {
+      (orderVehiclesByOrder[ov.order_id] ||= []).push(ov);
+    });
+  }
 }
 
 function subscribeRealtime() {
@@ -370,6 +381,11 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel('public:vehicles')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, async () => {
+      await loadAll(); renderCurrentView();
+    })
+    .subscribe();
+  sb.channel('public:order_vehicles')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'order_vehicles' }, async () => {
       await loadAll(); renderCurrentView();
     })
     .subscribe();
@@ -1177,6 +1193,8 @@ function orderCard(o, showDate) {
   const badgeClass = 'status-' + o.status;
   const items = checklistByOrder[o.id] || [];
   const doneCount = items.filter(i => i.done).length;
+  const vehicleNames = (orderVehiclesByOrder[o.id] || []).map(v => v.vehicle_name);
+  const transportLabel = vehicleNames.length ? vehicleNames.join(' + ') : (o.transport || '');
 
   const daysLeft = daysBetween(todayStr(), o.tour_date);
   let warnLine = '';
@@ -1196,7 +1214,7 @@ function orderCard(o, showDate) {
     </div>
     <div class="meta">
       ${showDate ? `📅 ${fmtDate(o.tour_date)}${o.tour_time ? ', ' + o.tour_time : ''}<br/>` : (o.tour_time ? `🕐 ${o.tour_time}<br/>` : '')}
-      👥 ${o.group_size} чел. ${o.transport ? '· ' + escapeHtml(o.transport) : ''}<br/>
+      👥 ${o.group_size} чел. ${transportLabel ? '· ' + escapeHtml(transportLabel) : ''}<br/>
       ${o.customer_phone ? '📞 ' + escapeHtml(o.customer_phone) + '<br/>' : ''}
       ${o.total_price ? '💵 ' + o.total_price + ' ' + o.currency + (o.deposit_amount ? ' (аванс ' + o.deposit_amount + (o.deposit_paid ? ', оплачен' : ', ожидается') + ')' : '') + '<br/>' : ''}
     </div>
@@ -1218,18 +1236,19 @@ const modal = document.getElementById('order-modal');
 document.getElementById('btn-new-order').onclick = () => openOrderModal(null);
 document.getElementById('f-cancel').onclick = () => closeModal();
 
-function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; }
+function closeModal() { modal.style.display = 'none'; editingOrderId = null; editingChecklist = []; editingOrderPartners = []; editingOrderVehicles = []; }
 
-// Заполняет выпадающий список транспорта в форме заказа: сначала —
-// сохранённые в справочнике vehicles варианты (плюс всегда доступный
-// пункт "Не выбрано"), в конце — "Свой вариант…" для ручного ввода.
-function populateTransportSelect() {
-  const sel = document.getElementById('f-transport');
+// Заполняет выпадающий список для добавления транспорта в форме заказа:
+// сохранённые в справочнике vehicles варианты + "Свой вариант…" в конце
+// для ручного ввода. На один тур можно добавить сколько угодно машин.
+function populateVehicleSelect() {
+  const sel = document.getElementById('f-vehicle-select');
+  const current = sel.value;
   const names = [...vehicles].map(v => v.name).sort((a, b) => a.localeCompare(b, 'ru'));
-  sel.innerHTML = '<option value="">—</option>' +
+  sel.innerHTML = '<option value="">— выбрать транспорт —</option>' +
     names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('') +
-    '<option value="Не выбрано">Не выбрано</option>' +
     '<option value="__custom__">Свой вариант…</option>';
+  sel.value = current;
 }
 
 // Заполняет выпадающий список партнёров в форме заказа актуальными данными
@@ -1253,24 +1272,6 @@ function openOrderModal(orderId) {
   document.getElementById('f-tour-type').value = o?.tour_type || 'CHR1_ChCh_1_day';
   document.getElementById('f-tour-name').value = o?.tour_name || '';
   document.getElementById('f-group-size').value = o?.group_size || 1;
-  populateTransportSelect();
-  {
-    const transportSel = document.getElementById('f-transport');
-    const transportNew = document.getElementById('f-transport-new');
-    const val = o?.transport || '';
-    const known = new Set([...vehicles.map(v => v.name), 'Не выбрано', '']);
-    if (val && !known.has(val)) {
-      // старое значение или свой вариант, которого ещё нет в справочнике —
-      // показываем как выбранный "Свой вариант…" с текстом в поле рядом
-      transportSel.value = '__custom__';
-      transportNew.value = val;
-      transportNew.style.display = '';
-    } else {
-      transportSel.value = val;
-      transportNew.value = '';
-      transportNew.style.display = 'none';
-    }
-  }
   document.getElementById('f-customer-name').value = o?.customer_name || '';
   document.getElementById('f-customer-phone').value = o?.customer_phone || '';
   document.getElementById('f-customer-email').value = o?.customer_email || '';
@@ -1300,6 +1301,21 @@ function openOrderModal(orderId) {
   document.getElementById('f-partner-select').value = '';
   document.getElementById('f-partner-amount').value = '';
   document.getElementById('f-partner-note').value = '';
+
+  populateVehicleSelect();
+  editingOrderVehicles = o ? (orderVehiclesByOrder[o.id] || []).map(x => ({ ...x })) : [];
+  // Подстраховка: если у заказа ещё нет строк в новом списке транспорта,
+  // но есть старое значение в orders.transport (заказ создан до перехода
+  // на список из нескольких машин, или миграция с переносом данных ещё не
+  // применена) — переносим его в список автоматически, чтобы не потерять.
+  if (o && editingOrderVehicles.length === 0 && o.transport && o.transport !== 'Не выбрано') {
+    editingOrderVehicles.push({ vehicle_name: o.transport, note: null, _new: true });
+  }
+  renderOrderVehiclesEditor();
+  document.getElementById('f-vehicle-select').value = '';
+  document.getElementById('f-vehicle-new').value = '';
+  document.getElementById('f-vehicle-new').style.display = 'none';
+  document.getElementById('f-vehicle-note').value = '';
 
   updateTourDateWarning();
   modal.style.display = 'flex';
@@ -1355,12 +1371,12 @@ function renderChecklistEditor() {
   });
 }
 
-const transportSelect = document.getElementById('f-transport');
-const transportCustomInput = document.getElementById('f-transport-new');
-transportSelect.onchange = () => {
-  const isCustom = transportSelect.value === '__custom__';
-  transportCustomInput.style.display = isCustom ? '' : 'none';
-  if (isCustom) transportCustomInput.focus();
+const vehicleSelect = document.getElementById('f-vehicle-select');
+const vehicleCustomInput = document.getElementById('f-vehicle-new');
+vehicleSelect.onchange = () => {
+  const isCustom = vehicleSelect.value === '__custom__';
+  vehicleCustomInput.style.display = isCustom ? '' : 'none';
+  if (isCustom) vehicleCustomInput.focus();
 };
 
 const checklistSelect = document.getElementById('f-checklist-select');
@@ -1417,6 +1433,52 @@ function renderOrderPartnersEditor() {
   });
 }
 
+// ------------------------------------------------------------
+// Транспорт, привязанный к текущему заказу (в форме заказа) —
+// на один тур может понадобиться несколько машин, у каждой своя заметка
+// (например, кто на ней едет/за рулём)
+// ------------------------------------------------------------
+function renderOrderVehiclesEditor() {
+  const box = document.getElementById('f-vehicles');
+  if (!editingOrderVehicles.length) {
+    box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Транспорт не добавлен</div>';
+    return;
+  }
+  box.innerHTML = '';
+  editingOrderVehicles.forEach((item, idx) => {
+    const row = document.createElement('div');
+    row.className = 'ordervehicle-row';
+    row.innerHTML = `
+      <span class="name">${escapeHtml(item.vehicle_name)}</span>
+      <span class="note">${escapeHtml(item.note || '')}</span>
+      <button class="ghost ov-remove" data-idx="${idx}">✕</button>
+    `;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('.ov-remove').forEach(btn => btn.onclick = (e) => {
+    const idx = +e.target.dataset.idx;
+    editingOrderVehicles.splice(idx, 1);
+    renderOrderVehiclesEditor();
+  });
+}
+
+document.getElementById('f-vehicle-add-btn').onclick = () => {
+  let name;
+  if (vehicleSelect.value === '__custom__') {
+    name = vehicleCustomInput.value.trim();
+  } else {
+    name = vehicleSelect.value;
+  }
+  if (!name) { alert('Выберите или введите транспорт'); return; }
+  const note = document.getElementById('f-vehicle-note').value.trim() || null;
+  editingOrderVehicles.push({ vehicle_name: name, note, _new: true });
+  vehicleSelect.value = '';
+  vehicleCustomInput.value = '';
+  vehicleCustomInput.style.display = 'none';
+  document.getElementById('f-vehicle-note').value = '';
+  renderOrderVehiclesEditor();
+};
+
 document.getElementById('f-partner-add-btn').onclick = () => {
   const partnerId = document.getElementById('f-partner-select').value;
   if (!partnerId) { alert('Выберите партнёра'); return; }
@@ -1430,20 +1492,16 @@ document.getElementById('f-partner-add-btn').onclick = () => {
 };
 
 document.getElementById('f-save').onclick = async () => {
-  // Если выбран "Свой вариант…" — берём текст из соседнего поля;
-  // иначе значение обычного выпадающего списка (справочник + "Не выбрано").
-  let transportValue = document.getElementById('f-transport').value || null;
-  if (transportValue === '__custom__') {
-    transportValue = document.getElementById('f-transport-new').value.trim() || null;
-  }
-
   const payload = {
     tour_date: document.getElementById('f-tour-date').value,
     tour_time: document.getElementById('f-tour-time').value || null,
     tour_type: document.getElementById('f-tour-type').value,
     tour_name: document.getElementById('f-tour-name').value,
     group_size: parseInt(document.getElementById('f-group-size').value) || 1,
-    transport: transportValue,
+    // orders.transport (одно значение) больше не редактируется в форме —
+    // заменено списком "Транспорт по этому туру" (order_vehicles), который
+    // поддерживает несколько машин на один тур. Колонка в базе оставлена
+    // как есть (не трогаем и не удаляем), просто больше не перезаписывается.
     customer_name: document.getElementById('f-customer-name').value,
     customer_phone: document.getElementById('f-customer-phone').value || null,
     customer_email: document.getElementById('f-customer-email').value || null,
@@ -1480,13 +1538,26 @@ document.getElementById('f-save').onclick = async () => {
     orderId = data.id;
   }
 
-  // если ввели новый свой вариант транспорта — сохраняем его в справочник
-  // vehicles, чтобы в следующий раз он был доступен для выбора из списка
-  if (transportValue && transportValue !== 'Не выбрано') {
-    const alreadyKnown = vehicles.some(v => v.name.toLowerCase() === transportValue.toLowerCase());
+  // если среди добавленного транспорта есть новые свои варианты — сохраняем
+  // их в справочник vehicles, чтобы в следующий раз они были в списке
+  for (const item of editingOrderVehicles) {
+    const alreadyKnown = vehicles.some(v => v.name.toLowerCase() === item.vehicle_name.toLowerCase());
     if (!alreadyKnown) {
-      const { error: vErr } = await sb.from('vehicles').upsert({ name: transportValue }, { onConflict: 'name', ignoreDuplicates: true });
+      const { error: vErr } = await sb.from('vehicles').upsert({ name: item.vehicle_name }, { onConflict: 'name', ignoreDuplicates: true });
       if (vErr) console.error(vErr); // не критично для сохранения заказа — просто не попадёт в справочник
+    }
+  }
+
+  // синхронизация транспорта по туру (может быть несколько машин)
+  const originalVehicles = orderVehiclesByOrder[orderId] || [];
+  const keepVehicleIds = editingOrderVehicles.filter(x => x.id).map(x => x.id);
+  const removedVehicles = originalVehicles.filter(ov => !keepVehicleIds.includes(ov.id));
+  for (const r of removedVehicles) await sb.from('order_vehicles').delete().eq('id', r.id);
+  for (const item of editingOrderVehicles) {
+    if (item.id) {
+      await sb.from('order_vehicles').update({ vehicle_name: item.vehicle_name, note: item.note }).eq('id', item.id);
+    } else {
+      await sb.from('order_vehicles').insert({ order_id: orderId, vehicle_name: item.vehicle_name, note: item.note });
     }
   }
 

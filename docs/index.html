@@ -140,19 +140,8 @@
         </div>
       </div>
 
-      <div class="grid2">
-        <div>
-          <label>Кол-во человек</label>
-          <input type="number" id="f-group-size" min="1" value="1" />
-        </div>
-        <div>
-          <label>Транспорт</label>
-          <select id="f-transport">
-            <option value="">—</option>
-          </select>
-          <input type="text" id="f-transport-new" placeholder="Введите свой вариант транспорта" style="display:none; margin-top:6px;" />
-        </div>
-      </div>
+      <label>Кол-во человек</label>
+      <input type="number" id="f-group-size" min="1" value="1" />
 
       <div class="section-title">Клиент</div>
       <div class="grid2">
@@ -268,6 +257,18 @@
         </select>
         <input type="text" id="f-checklist-new" placeholder="Введите свой пункт" style="display:none;" />
         <button class="secondary" id="f-checklist-add-btn">+</button>
+      </div>
+
+      <div class="section-title">Транспорт по этому туру</div>
+      <div class="ordervehicles" id="f-vehicles"></div>
+      <div class="ordervehicles-add">
+        <select id="f-vehicle-select">
+          <option value="">— выбрать транспорт —</option>
+          <option value="__custom__">Свой вариант…</option>
+        </select>
+        <input type="text" id="f-vehicle-new" placeholder="Введите свой вариант" style="display:none;" />
+        <input type="text" id="f-vehicle-note" placeholder="Заметка (напр. кто за рулём)" />
+        <button class="secondary" id="f-vehicle-add-btn">+</button>
       </div>
 
       <div class="section-title">Партнёры по этому туру</div>
