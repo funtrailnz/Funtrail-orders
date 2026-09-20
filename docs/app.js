@@ -1428,10 +1428,7 @@ function openTaskModal(taskId) {
   const t = taskId ? businessTasks.find(x => x.id === taskId) : null;
   document.getElementById('tk-delete').style.display = t ? 'inline-block' : 'none';
   fillTaskEditFields(t);
-  setTaskModalMode(t ? 'view' : 'edit');
-  renderTaskCommentsBox();
-  renderTaskAttachmentsBox();
-  renderTaskSubtasksBox();
+  setTaskModalMode(t ? 'view' : 'edit'); // сама переключает и перерисовывает комментарии/файлы/подзадачи
   document.getElementById('tk-file-input').value = '';
   taskModal.style.display = 'flex';
 }
@@ -1470,6 +1467,13 @@ function setTaskModalMode(mode) {
   document.getElementById('tk-edit-btn').style.display = (mode === 'view') ? 'inline-block' : 'none';
   document.getElementById('tk-close-view').style.display = (mode === 'view') ? 'inline-block' : 'none';
   if (mode === 'view' && t) renderTaskViewBlock(t);
+  // Просмотр — только для чтения: вся информация (комментарии/файлы/
+  // подзадачи) видна, но добавлять/удалять можно только в редактировании.
+  // Поэтому при каждом переключении режима перерисовываем эти три секции —
+  // у них меняется видимость форм добавления и кнопок удаления.
+  renderTaskCommentsBox();
+  renderTaskAttachmentsBox();
+  renderTaskSubtasksBox();
 }
 
 function renderTaskViewBlock(t) {
@@ -1477,8 +1481,14 @@ function renderTaskViewBlock(t) {
   const badge = document.getElementById('tk-view-status-badge');
   badge.className = 'badge status-' + t.status;
   badge.textContent = TASK_STATUS_LABELS[t.status] || t.status;
-  const dueLine = t.due_date ? `📅 ${fmtDate(t.due_date)}` : (TASK_PRIORITY_LABELS[t.priority] || t.priority);
-  document.getElementById('tk-view-meta').innerHTML = `${dueLine}${t.category ? ' · ' + escapeHtml(t.category) : ''}`;
+  // Просмотр должен показывать ВСЮ информацию по задаче, не только
+  // срок/категорию — добавляем приоритет, дату создания и дату завершения
+  const lines = [];
+  lines.push(t.due_date ? `📅 Срок: ${fmtDate(t.due_date)}` : `Приоритет: ${TASK_PRIORITY_LABELS[t.priority] || t.priority}`);
+  if (t.category) lines.push(escapeHtml(t.category));
+  if (t.created_at) lines.push(`Создано: ${fmtDateTime(t.created_at)}`);
+  if (t.status === 'done' && t.completed_at) lines.push(`Выполнено: ${fmtDateTime(t.completed_at)}`);
+  document.getElementById('tk-view-meta').innerHTML = lines.join(' · ');
 }
 
 document.getElementById('tk-edit-btn').onclick = () => setTaskModalMode('edit');
@@ -1522,10 +1532,15 @@ function renderTaskAttachmentsBox() {
   if (!editingTaskId) {
     box.innerHTML = '<div class="empty-hint" style="padding:10px 0;">Файлов пока нет</div>';
     addBox.style.display = 'none';
+    hint.style.display = '';
     hint.textContent = 'Сначала сохраните задачу — после этого можно будет прикреплять файлы.';
     return;
   }
-  addBox.style.display = '';
+  // Добавлять/удалять файлы можно только в режиме редактирования; в
+  // просмотре видно всё содержимое, но только для чтения (открыть/скачать)
+  const canEdit = taskModalMode === 'edit';
+  addBox.style.display = canEdit ? '' : 'none';
+  hint.style.display = canEdit ? '' : 'none';
   hint.textContent = 'Можно прикрепить сколько угодно файлов (до 50 МБ каждый) — загружаются сразу.';
   const items = taskAttachmentsByTask[editingTaskId] || [];
   if (!items.length) {
@@ -1538,7 +1553,7 @@ function renderTaskAttachmentsBox() {
         <span class="ta-actions">
           <button type="button" class="ghost ta-view" data-idx="${idx}" title="Просмотреть">👁</button>
           <button type="button" class="ghost ta-download" data-idx="${idx}" title="Скачать">⬇</button>
-          <button type="button" class="ghost ta-remove" data-idx="${idx}" title="Удалить">✕</button>
+          ${canEdit ? `<button type="button" class="ghost ta-remove" data-idx="${idx}" title="Удалить">✕</button>` : ''}
         </span>
       </div>
     `).join('');
@@ -1633,7 +1648,10 @@ function renderTaskCommentsBox() {
     hint.style.display = '';
     return;
   }
-  addBox.style.display = '';
+  // Сама история комментариев видна всегда (в т.ч. в просмотре); форма
+  // добавления новой заметки — только в режиме редактирования
+  const canEdit = taskModalMode === 'edit';
+  addBox.style.display = canEdit ? '' : 'none';
   hint.style.display = 'none';
   const list = taskCommentsByTask[editingTaskId] || [];
   box.innerHTML = !list.length
@@ -1676,7 +1694,10 @@ function renderTaskSubtasksBox() {
     hint.style.display = '';
     return;
   }
-  addBox.style.display = '';
+  // Список подзадач виден всегда (в т.ч. в просмотре, можно открыть любую
+  // кликом); форма быстрого добавления новой — только в редактировании
+  const canEdit = taskModalMode === 'edit';
+  addBox.style.display = canEdit ? '' : 'none';
   hint.style.display = 'none';
   const list = businessTasks.filter(x => x.parent_task_id === editingTaskId)
     .sort((a, b) => (a.due_date || '9999-99-99').localeCompare(b.due_date || '9999-99-99'));
@@ -1762,10 +1783,7 @@ document.getElementById('tk-save').onclick = async () => {
   editingTaskId = taskId;
   document.getElementById('tk-delete').style.display = 'inline-block';
   fillTaskEditFields(businessTasks.find(x => x.id === taskId));
-  setTaskModalMode('view');
-  renderTaskCommentsBox();
-  renderTaskAttachmentsBox();
-  renderTaskSubtasksBox();
+  setTaskModalMode('view'); // сама перерисовывает комментарии/файлы/подзадачи
 };
 
 document.getElementById('tk-delete').onclick = async () => {
